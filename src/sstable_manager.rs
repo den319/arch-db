@@ -1,16 +1,20 @@
 use std::{collections::{BTreeMap, HashMap}, fs};
 
-use crate::{engine::Value, sstable::{SSTableIndex, read_sstable, write_sstable}};
+use bloom::{ASMS, BloomFilter};
+
+use crate::{engine::Value, error::Result, sstable::{SSTableIndex, read_sstable, write_sstable}};
 
 
 pub struct SSTableManager {
     pub(crate) tables: Vec<SSTable>,
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
+
 pub struct SSTable {
     pub path: String,
     pub index: SSTableIndex,
+    pub bloom: BloomFilter,
 }
 
 impl SSTableManager {
@@ -28,7 +32,11 @@ impl SSTableManager {
 
         let mut offset= 0u64;
 
+        let mut bloom= BloomFilter::with_rate(0.01, data.len() as u32);
+
         for (key, val) in &data {
+            bloom.insert(&key);
+
             offsets.insert(key.clone(), offset);
 
             // println!("{}", offset);
@@ -46,6 +54,7 @@ impl SSTableManager {
         let table= SSTable {
             path: path.to_string(),
             index: SSTableIndex { offsets },
+            bloom,
         };
 
         // println!("{:?}", table);
@@ -53,11 +62,12 @@ impl SSTableManager {
         self.tables.push(table);
      }
 
-    pub fn compact(&mut self) {
+    pub fn compact(&mut self) -> Result<()> {
         let mut merged= HashMap::new();
 
+
         for table in &self.tables {
-            let data= read_sstable(&table.path).expect("Failed to read data!");
+            let data= read_sstable(&table.path)?;
 
             for (key, val) in data {
                 match val {
@@ -75,15 +85,23 @@ impl SSTableManager {
 
         sorted.sort_by(|a,b| a.0.cmp(&b.0));
 
-        let index= write_sstable("sst_compacted.bin", &sorted).expect("Compaction failed!");
+        let mut bloom = BloomFilter::with_rate(0.01,sorted.len() as u32);
+
+        for (key, _) in &sorted {
+            bloom.insert(key);
+        }
+
+        let index= write_sstable("sst_compacted.bin", &sorted)?;
 
         for table in &self.tables {
-            fs::remove_file(&table.path).expect("Failed to delete old SSTable");
+            fs::remove_file(&table.path)?;
         }
         self.tables.clear();
 
 
-        self.tables.push(SSTable { path: "sst_compacted.bin".to_string(), index });
+        self.tables.push(SSTable { path: "sst_compacted.bin".to_string(), index, bloom });
+
+        Ok(())
     }
 }
 
@@ -103,10 +121,10 @@ pub fn discover_sstables() -> usize {
             let id_part= name.trim_start_matches("sst_").trim_end_matches(".bin");
             
             if let Ok(id)= id_part.parse::<usize>() {
-                max_id= max_id.max(id+1);
+                max_id= max_id.max(id);
             }
         }
     }        
 
-    max_id
+    max_id + 1
 }

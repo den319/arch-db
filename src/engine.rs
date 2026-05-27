@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap};
 
-use crate::{command::Command, sstable::{search_sstable, write_sstable}, sstable_manager::{SSTable, SSTableManager}};
+use bloom::{ASMS, BloomFilter};
+
+use crate::{command::Command, error::Result, sstable::{search_sstable, write_sstable}, sstable_manager::{SSTable, SSTableManager, discover_sstables}};
 
 
 #[derive(Clone, Debug)]
@@ -13,6 +15,8 @@ pub struct Engine {
     memtable: BTreeMap<String, Value>,
     pub(crate) sstables: SSTableManager,
 }
+
+const MEMTABLE_LIMIT:usize= 1000;
 
 
 impl Engine {
@@ -27,6 +31,18 @@ impl Engine {
         match command {
             Command::Set(key, val) => {
                 self.memtable.insert(key, Value::Data(val));
+
+                let sstable_id= discover_sstables();
+                // println!("{:?}", sstable_id);
+                
+                if self.memtable_size() >= MEMTABLE_LIMIT {
+                    
+
+                    let file= format!("sst_{}.bin", sstable_id);
+
+                    let _= self.flush_to_sstable(&file);
+                }
+
                 Some("OK".to_string())
             }
             Command::Get(key) => {
@@ -39,14 +55,25 @@ impl Engine {
             }
             Command::Del(key) => {
                 self.memtable.insert(key, Value::Tombstone);
+
+                if self.memtable_size() >= MEMTABLE_LIMIT {
+                    let sstable_id= discover_sstables();
+
+                    let file= format!("sst_{}.bin", sstable_id);
+                    let _= self.flush_to_sstable(&file);
+                }
+
                 Some("Deleted".to_string())
             }
             Command::Exit => {
                 Some("Bye!".to_string())
             }
             Command::Compact => {
-                self.sstables.compact();
-                Some("Compaction completed!".to_string())
+                match self.sstables.compact() {
+                    Ok(_) => Some("Compaction completed!".to_string()),
+                    Err(e) => Some(format!("compaction failed: {}", e)),
+                }
+                
             }
 
             Command::Invalid => {
@@ -59,33 +86,47 @@ impl Engine {
         self.memtable.iter().map(|(k,v)| (k.clone(), v.clone())).collect()
     }
 
-    pub fn flush_to_sstable(&mut self, path:&str) {
+    pub fn flush_to_sstable(&mut self, path:&str) -> Result<()> {
         let data= self.snapshot();
 
+        let mut bloom = BloomFilter::with_rate(0.01,data.len() as u32);
+
+        for (key, _) in &data {
+            bloom.insert(key);
+        }
         // println!("{:?}", path);
-        let index=  write_sstable(path, &data).expect("Failed to write SSTable");
+        let index=  write_sstable(path, &data)?;
 
         self.sstables.tables.push(
             SSTable {
                 path: path.to_string(),
-                index
+                index,
+                bloom
             }
         );
         self.memtable.clear();
+
+        Ok(())
     }
 
     pub fn get_key(&self, key:&str) -> Option<Value> {
+
         if let Some(val)= self.memtable.get(key) {
-            println!("{:?}", val);
+            // println!("{:?}", val);
             return Some(val.clone());
         }
 
 
         for table in self.sstables.tables.iter().rev() {
+            if !table.bloom.contains(&key) {
+                println!("{:?}", key);
+                continue;
+            }
+
             if let Some(offset)= table.index.offsets.get(key) {
                 let (_,val) = search_sstable(&table.path, *offset).expect("Failed to read!");
 
-                println!("{:?}", val);
+                // println!("{:?}", val);
                 return Some(val);
             }
         }
@@ -93,4 +134,9 @@ impl Engine {
         // println!("Key not found!");
         Some(Value::Tombstone)
     }
+
+    pub fn memtable_size(&self) -> usize {
+        self.memtable.len()
+    }
 }
+

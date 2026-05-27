@@ -66,7 +66,9 @@ fn main() {
                 let file= format!("sst_{}.bin", sstable_id);
                 sstable_id += 1;
 
-                engine.flush_to_sstable(&file);
+                if let Err(e) = engine.flush_to_sstable(&file) {
+                    println!("Flush failed: {}", e);
+                }
                 println!("Bye!");
                 break;
             }
