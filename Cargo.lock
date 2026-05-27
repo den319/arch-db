@@ -5,3 +5,21 @@ version = 4
 [[package]]
 name = "arch-db"
 version = "0.1.0"
+dependencies = [
+ "bloom",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02b4ff8b16e6076c3e14220b39fbc1fabb6737522281a388998046859400895f"
+
+[[package]]
+name = "bloom"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d00ac8e5056d6d65376a3c1aa5c7c34850d6949ace17f0266953a254eb3d6fe8"
+dependencies = [
+ "bit-vec",
+]

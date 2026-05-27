@@ -21,6 +21,8 @@ pub fn parse(input: &str) -> Command {
         }
 
         "EXIT" => Command::Exit,
+        "COMPACT" => Command::Compact,
+        
         _ => Command::Invalid,
     }
 }

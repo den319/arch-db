@@ -5,6 +5,7 @@ pub enum Command {
     Del(String),
     Exit,
     Invalid,
+    Compact,
 }
 
 impl Command {
