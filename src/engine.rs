@@ -1,8 +1,8 @@
-use std::{collections::BTreeMap};
+use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}};
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{command::Command, error::Result, sstable::{search_sstable, write_sstable}, sstable_manager::{SSTable, SSTableManager, discover_sstables}};
+use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{SSTable, SSTableManager, discover_sstables}};
 
 
 #[derive(Clone, Debug)]
@@ -16,7 +16,35 @@ pub struct Engine {
     pub(crate) sstables: SSTableManager,
 }
 
+#[derive(Clone, Debug)]
+pub struct HeapItem {
+    key: String,
+    val: Value,
+    source_idx:usize, 
+}
+
 const MEMTABLE_LIMIT:usize= 1000;
+
+impl Eq for HeapItem {}
+
+impl PartialEq for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.key.cmp(&self.key)
+    }
+}
+
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 
 
 impl Engine {
@@ -74,6 +102,11 @@ impl Engine {
                     Err(e) => Some(format!("compaction failed: {}", e)),
                 }
                 
+            }
+            Command::Scan(start, end) => {
+                let result= self.scan(&start, &end);
+
+                Some(format!("{:?}", result))
             }
 
             Command::Invalid => {
@@ -137,6 +170,71 @@ impl Engine {
 
     pub fn memtable_size(&self) -> usize {
         self.memtable.len()
+    }
+
+    pub fn scan(&self, start:&str, end:&str) -> Vec<(String, Value)> {
+        let mut sources:Vec<Vec<(String, Value)>>= Vec::new();
+
+        // memtable (already sorted)
+        let mem_data:Vec<(String, Value)>= self.memtable.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+
+        // println!("data: {:?}", mem_data);
+
+        sources.push(mem_data);
+
+        // SSTable
+        for table in &self.sstables.tables {
+            // println!("{:?}", table.path);
+            let data= read_sstable(&table.path).expect("Scan Failed!");
+            sources.push(data);
+        }
+
+        let mut heap= BinaryHeap::new();
+
+        let mut positions= vec![0usize; sources.len()];
+
+        // println!("{:?}", sources);
+
+        for (src_idx, source) in sources.iter().enumerate() {
+            // println!("{:?} source:{:?} data: {:?}", src_idx, source, source.get(1));
+
+            if let Some((k,v))= source.get(0) {
+                heap.push(HeapItem {
+                    key: k.clone(),
+                    val: v.clone(),
+                    source_idx: src_idx,
+                });
+            }
+        }
+
+        let mut merged: HashMap<String, Value>= HashMap::new();
+
+        // println!("{:?}", heap);
+
+        while let Some(item)= heap.pop() {
+            // println!("{:?}", item);
+            if item.key.as_str() >= start && item.key.as_str() < end {
+                merged.insert(item.key.clone(), item.val.clone());
+            }
+            let src= item.source_idx;
+
+            positions[src] += 1;
+
+            // println!("sources: {:?} positions: {:?}", sources, positions);
+            // println!("{:?}", sources[src].get(positions[src]));
+
+            if let Some((k,v)) = sources[src].get(positions[src]) {
+                heap.push(HeapItem { key: k.clone(), val: v.clone(), source_idx: src });
+            }
+        }
+
+        let mut result:Vec<_>= merged.into_iter().filter(|(_,v)| {
+            matches!(v, Value::Data(_))
+        }).collect();
+
+        result.sort_by(|a,b| a.0.cmp(&b.0));
+
+        result
     }
 }
 

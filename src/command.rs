@@ -6,6 +6,7 @@ pub enum Command {
     Exit,
     Invalid,
     Compact,
+    Scan(String, String),
 }
 
 impl Command {

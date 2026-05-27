@@ -22,6 +22,9 @@ pub fn parse(input: &str) -> Command {
 
         "EXIT" => Command::Exit,
         "COMPACT" => Command::Compact,
+        "SCAN" if parts.len() >= 3 => {
+            Command::Scan(parts[1].to_string(), parts[2..].join(" "))
+        }
         
         _ => Command::Invalid,
     }
