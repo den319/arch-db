@@ -121,8 +121,14 @@ impl Engine {
 
     pub fn flush_to_sstable(&mut self, path:&str) -> Result<()> {
         let data= self.snapshot();
+        if data.is_empty() {
+            // skip SSTable creation
+            return Ok(()); 
+        }
 
-        let mut bloom = BloomFilter::with_rate(0.01,data.len() as u32);
+        let size = data.len().max(8) as u32;
+        let mut bloom = BloomFilter::with_rate(0.01, size);
+        
 
         for (key, _) in &data {
             bloom.insert(key);
@@ -151,21 +157,22 @@ impl Engine {
 
 
         for table in self.sstables.tables.iter().rev() {
+            // println!("{:?}", table.index);
+            
             if !table.bloom.contains(&key) {
-                println!("{:?}", key);
+                // println!("{:?}", key);
                 continue;
             }
 
-            if let Some(offset)= table.index.offsets.get(key) {
-                let (_,val) = search_sstable(&table.path, *offset).expect("Failed to read!");
 
+            if let Some((_, val)) = search_sstable(&table.path, &table.index, key).ok().flatten() {
                 // println!("{:?}", val);
                 return Some(val);
             }
         }
 
         // println!("Key not found!");
-        Some(Value::Tombstone)
+        None
     }
 
     pub fn memtable_size(&self) -> usize {

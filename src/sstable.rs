@@ -145,43 +145,67 @@ pub fn read_sstable(path:&str) -> Result<Vec<(String, Value)>> {
 
 }
 
-pub fn search_sstable(path: &str, offset: u64) -> Result<(String, Value)> {
+pub fn search_sstable(path: &str, index: &SSTableIndex, key:&str) -> Result<Option<(String, Value)>> {
     let mut file= File::open(path)?;
 
-    file.seek(SeekFrom::Start(offset))?;
-
-    let mut type_buff= [0u8; 1];
-    file.read_exact(&mut type_buff)?;
-
-    let record_type= type_buff[0];
-
-    // length
-    let mut len_buff= [0u8;4];
-    file.read_exact(&mut len_buff)?;
-
-    let key_len= u32::from_be_bytes(len_buff) as usize;
-
-    file.read_exact(&mut len_buff)?;
-    let val_len= u32::from_be_bytes(len_buff) as usize;
-
-    // key
-    let mut key_buff= vec![0u8; key_len];
-    file.read_exact(&mut key_buff)?;
-    let key= String::from_utf8(key_buff).unwrap();
-
-    // value
-    let val= match record_type {
-        1 => {
-            let mut val_buff= vec![0u8;val_len];
-            file.read_exact(&mut val_buff)?;
-
-            Value::Data(String::from_utf8(val_buff).unwrap())
-        }
-        0 => Value::Tombstone,
-        _ => panic!("Invalid record type")
+    let block_offset= match find_block(index, key) {
+        Some(o) => o,
+        None => return Ok(None),
     };
 
-    Ok((key, val))
+    file.seek(SeekFrom::Start(block_offset))?;
+
+    let mut buffer= vec![0u8; BLOCK_SIZE];
+    let bytes_read= file.read(&mut buffer)?;
+
+    buffer.truncate(bytes_read);
+
+    let mut i=0;
+
+    while i < buffer.len() {
+        if i + 9 > buffer.len() {
+            break;
+        }
+
+        let record_type= buffer[i];
+        i += 1;
+
+        let key_len = u32::from_be_bytes([buffer[i], buffer[i+1], buffer[i+2], buffer[i+3]]) as usize;
+        i += 4;
+
+        let val_len = u32::from_be_bytes([buffer[i], buffer[i+1], buffer[i+2], buffer[i+3]]) as usize;
+        i += 4;
+
+        if i + key_len > buffer.len() {
+            break;
+        }
+
+        let k = String::from_utf8(buffer[i..i+key_len].to_vec()).unwrap();
+        i += key_len;
+
+        let v= match record_type {
+            1 => {
+                if i + val_len > buffer.len() {
+                    break;
+                }
+                let val= String::from_utf8(buffer[i..i+val_len].to_vec()).unwrap();
+                i += val_len;
+                Value::Data(val)
+            }
+            0 => {
+                i += val_len;
+                Value::Tombstone
+            },
+            _ => panic!("Invalid record type"),
+        };
+
+        if k == key {
+            return Ok(Some((k,v)));
+        }
+    }
+
+
+    Ok(None)
 
 }
 
