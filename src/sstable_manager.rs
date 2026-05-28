@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap}, fs};
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{engine::Value, error::Result, sstable::{SSTableIndex, read_sstable, write_sstable}};
+use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, SSTableIndex, read_sstable, write_sstable}};
 
 
 pub struct SSTableManager {
@@ -29,15 +29,33 @@ impl SSTableManager {
         let data= read_sstable(path).expect("Failed to read sstable!");
 
         let mut offsets= BTreeMap::new();
+        let mut blocks= Vec::new();
 
         let mut offset= 0u64;
+        let mut current_block_size= 0usize;
 
         let mut bloom= BloomFilter::with_rate(0.01, data.len() as u32);
 
         for (key, val) in &data {
+
+            let record_size= 1 + 4 + 4 + key.len() + match val {
+                Value::Data(v) => v.len(),
+                Value::Tombstone => 0,
+            };
+            
             bloom.insert(&key);
 
+            if current_block_size == 0 {
+                blocks.push((key.clone(), offset));
+            }
+
             offsets.insert(key.clone(), offset);
+
+            current_block_size += record_size;
+
+            if current_block_size >= BLOCK_SIZE {
+                current_block_size = 0;
+            }
 
             // println!("{}", offset);
             offset += match val {
@@ -53,7 +71,7 @@ impl SSTableManager {
 
         let table= SSTable {
             path: path.to_string(),
-            index: SSTableIndex { offsets },
+            index: SSTableIndex { offsets, blocks },
             bloom,
         };
 
