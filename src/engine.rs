@@ -97,11 +97,18 @@ impl Engine {
                 Some("Bye!".to_string())
             }
             Command::Compact => {
+                // Flush memtable to SSTable first, then compact
+                if self.memtable_size() > 0 {
+                    let sstable_id = discover_sstables();
+                    let file = format!("sst_{}.bin", sstable_id);
+                    if let Err(e) = self.flush_to_sstable(&file) {
+                        return Some(format!("flush failed: {}", e));
+                    }
+                }
                 match self.sstables.compact() {
                     Ok(_) => Some("Compaction completed!".to_string()),
                     Err(e) => Some(format!("compaction failed: {}", e)),
                 }
-                
             }
             Command::Scan(start, end) => {
                 let result= self.scan(&start, &end);
@@ -150,6 +157,7 @@ impl Engine {
 
     pub fn get_key(&self, key:&str) -> Option<Value> {
 
+        println!("GET KEY: {:?}", key);
         if let Some(val)= self.memtable.get(key) {
             // println!("{:?}", val);
             return Some(val.clone());
@@ -157,22 +165,31 @@ impl Engine {
 
 
         for table in self.sstables.tables.iter().rev() {
-            // println!("{:?}", table.index);
+            println!("table index: {:?}", table.index);
             
+            println!("bloom check: {} -> {}", key, table.bloom.contains(&key));
             if !table.bloom.contains(&key) {
-                // println!("{:?}", key);
                 continue;
             }
 
+            println!("checking SSTable: {}", table.path);
 
-            if let Some((_, val)) = search_sstable(&table.path, &table.index, key).ok().flatten() {
-                // println!("{:?}", val);
-                return Some(val);
+
+            match search_sstable(&table.path, &table.index, key) {
+                Ok(Some((_, val))) => {
+                    println!("Found in SSTable: {:?}", val);
+                    return Some(val);
+                }
+                Ok(None) => {
+                    println!("Not found in this block");
+                }
+                Err(e) => {
+                    println!("SSTABLE READ ERROR: {:?}", e);
+                }
             }
         }
 
-        // println!("Key not found!");
-        None
+        Some(Value::Tombstone)
     }
 
     pub fn memtable_size(&self) -> usize {

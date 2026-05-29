@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap}, fs};
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, SSTableIndex, read_sstable, write_sstable}};
+use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, BlockMeta, SSTableIndex, read_sstable, write_sstable}};
 
 
 pub struct SSTableManager {
@@ -34,7 +34,16 @@ impl SSTableManager {
         let mut offset= 0u64;
         let mut current_block_size= 0usize;
 
-        let mut bloom= BloomFilter::with_rate(0.01, data.len() as u32);
+        let size = data.len().max(8) as u32;
+        let mut bloom= BloomFilter::with_rate(0.01, size);
+        if data.is_empty() {
+            self.tables.push(SSTable {
+                path: path.to_string(),
+                index: SSTableIndex { offsets, blocks },
+                bloom,
+            });
+            return;
+        }
 
         for (key, val) in &data {
 
@@ -46,7 +55,11 @@ impl SSTableManager {
             bloom.insert(&key);
 
             if current_block_size == 0 {
-                blocks.push((key.clone(), offset));
+                blocks.push(BlockMeta {
+                    start_key: key.clone(),
+                    offset: offset,
+                    record_offset: BTreeMap::new(),
+                });
             }
 
             offsets.insert(key.clone(), offset);
@@ -103,19 +116,22 @@ impl SSTableManager {
 
         sorted.sort_by(|a,b| a.0.cmp(&b.0));
 
-        let mut bloom = BloomFilter::with_rate(0.01,sorted.len() as u32);
+        for table in &self.tables {
+            fs::remove_file(&table.path)?;
+        }
+        self.tables.clear();
+        
+        if sorted.is_empty() {
+            return Ok(());
+        }
+
+        let mut bloom = BloomFilter::with_rate(0.01, sorted.len() as u32);
 
         for (key, _) in &sorted {
             bloom.insert(key);
         }
 
         let index= write_sstable("sst_compacted.bin", &sorted)?;
-
-        for table in &self.tables {
-            fs::remove_file(&table.path)?;
-        }
-        self.tables.clear();
-
 
         self.tables.push(SSTable { path: "sst_compacted.bin".to_string(), index, bloom });
 
