@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap}, fs::{self}};
+use std::{collections::{BTreeMap, HashMap}, fs::{self}, sync::atomic::{AtomicU64, Ordering}};
 
 use bloom::{ASMS, BloomFilter};
 
@@ -270,32 +270,10 @@ impl SSTableManager {
 }
 
 
-pub fn discover_sstables() -> usize {
-    let mut max_id=0;
+static SSTABLE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-    let entries= fs::read_dir(".").expect("Failed to read directory!");
-
-    for entry in entries {
-        let entry= entry.unwrap();
-        
-        let name= entry.file_name();
-        let name= name.to_string_lossy();
-
-        if !name.starts_with("sst_") && !name.ends_with(".bin") {
-            continue;
-        }
-
-        let stem= name.trim_end_matches(".bin");
-
-        if let Some(last)= stem.rsplit('_').next() {
-            
-            if let Ok(id)= last.parse::<usize>() {
-                max_id= max_id.max(id);
-            }
-        }
-    }        
-
-    max_id + 1
+pub fn discover_sstables() -> u64 {
+    SSTABLE_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
 
