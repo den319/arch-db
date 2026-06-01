@@ -169,6 +169,8 @@ pub fn read_sstable(path:&str) -> Result<Vec<(String, Value)>> {
 }
 
 pub fn search_sstable(path: &str, index: &SSTableIndex, key:&str) -> Result<Option<(String, Value)>> {
+    println!("file path: {}", path);
+    
     let mut file= File::open(path)?;
 
     let block= match find_block(index, key) {

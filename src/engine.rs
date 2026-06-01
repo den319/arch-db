@@ -2,7 +2,7 @@ use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}};
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{SSTable, SSTableManager, discover_sstables}};
+use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, discover_sstables}, storage::Storage};
 
 
 #[derive(Clone, Debug)]
@@ -12,8 +12,9 @@ pub enum Value {
 }
 
 pub struct Engine {
-    memtable: BTreeMap<String, Value>,
+    pub(crate) memtable: BTreeMap<String, Value>,
     pub(crate) sstables: SSTableManager,
+    pub(crate) memtable_limit: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -22,8 +23,6 @@ pub struct HeapItem {
     val: Value,
     source_idx:usize, 
 }
-
-const MEMTABLE_LIMIT:usize= 1000;
 
 impl Eq for HeapItem {}
 
@@ -52,6 +51,7 @@ impl Engine {
         Self {
             memtable: BTreeMap::new(),
             sstables: SSTableManager::new(),
+            memtable_limit: 1000,
         }
     }
 
@@ -60,16 +60,8 @@ impl Engine {
             Command::Set(key, val) => {
                 self.memtable.insert(key, Value::Data(val));
 
-                let sstable_id= discover_sstables();
-                // println!("{:?}", sstable_id);
-                
-                if self.memtable_size() >= MEMTABLE_LIMIT {
-                    
+                self.maybe_flush().expect("Flush failed!");
 
-                    let file= format!("sst_{}.bin", sstable_id);
-
-                    let _= self.flush_to_sstable(&file);
-                }
 
                 Some("OK".to_string())
             }
@@ -84,23 +76,30 @@ impl Engine {
             Command::Del(key) => {
                 self.memtable.insert(key, Value::Tombstone);
 
-                if self.memtable_size() >= MEMTABLE_LIMIT {
-                    let sstable_id= discover_sstables();
-
-                    let file= format!("sst_{}.bin", sstable_id);
-                    let _= self.flush_to_sstable(&file);
-                }
+                self.maybe_flush().expect("Flush failed!");
 
                 Some("Deleted".to_string())
             }
             Command::Exit => {
-                Some("Bye!".to_string())
+                if self.memtable_size() > 0 {
+                    let sstable_id = discover_sstables();
+                    let file = format!("sst_l0_{}.bin", sstable_id);
+                    if let Err(e) = self.flush_to_sstable(&file) {
+                        return Some(format!("flush failed: {}", e));
+                    }
+                }
+                
+                match self.sstables.compact() {
+                    Ok(_) => Some("Bye!".to_string()),
+                    Err(e) => Some(format!("compaction failed: {}", e)),
+                }
+                
             }
             Command::Compact => {
                 // Flush memtable to SSTable first, then compact
                 if self.memtable_size() > 0 {
                     let sstable_id = discover_sstables();
-                    let file = format!("sst_{}.bin", sstable_id);
+                    let file = format!("sst_l0_{}.bin", sstable_id);
                     if let Err(e) = self.flush_to_sstable(&file) {
                         return Some(format!("flush failed: {}", e));
                     }
@@ -143,13 +142,19 @@ impl Engine {
         // println!("{:?}", path);
         let index=  write_sstable(path, &data)?;
 
-        self.sstables.tables.push(
+        self.sstables.add_table(
             SSTable {
                 path: path.to_string(),
                 index,
-                bloom
+                bloom,
+                level: Level::L0,
             }
         );
+
+        if self.sstables.l0.len() >= 4 {
+            let _= self.sstables.compact_l0_to_l1();
+        }
+        
         self.memtable.clear();
 
         Ok(())
@@ -163,8 +168,23 @@ impl Engine {
             return Some(val.clone());
         }
 
+        if let Some(v) = Self::search_level(&self.sstables.l0, key) {
+            return Some(v);
+        }
 
-        for table in self.sstables.tables.iter().rev() {
+        if let Some(v) = Self::search_level(&self.sstables.l1, key) {
+            return Some(v);
+        }   
+
+        if let Some(v) = Self::search_level(&self.sstables.l2, key) {
+            return Some(v);
+        }
+
+        Some(Value::Tombstone)
+    }
+
+    pub fn search_level(level: &[SSTable], key:&str) -> Option<Value> {
+        for table in level.iter().rev() {
             println!("table index: {:?}", table.index);
             
             println!("bloom check: {} -> {}", key, table.bloom.contains(&key));
@@ -174,9 +194,11 @@ impl Engine {
 
             println!("checking SSTable: {}", table.path);
 
-
             match search_sstable(&table.path, &table.index, key) {
                 Ok(Some((_, val))) => {
+                    if let Value::Tombstone = val {
+                        return Some(Value::Tombstone);
+                    }
                     println!("Found in SSTable: {:?}", val);
                     return Some(val);
                 }
@@ -189,7 +211,19 @@ impl Engine {
             }
         }
 
-        Some(Value::Tombstone)
+        None
+
+    }
+
+    pub fn maybe_flush(&mut self) -> Result<()> {
+
+        if self.memtable.len() >= self.memtable_limit {
+            let path = format!("sst_l0_{}.bin",discover_sstables());
+    
+            self.flush_to_sstable(&path)?;
+        }
+
+        Ok(())
     }
 
     pub fn memtable_size(&self) -> usize {
@@ -207,9 +241,19 @@ impl Engine {
         sources.push(mem_data);
 
         // SSTable
-        for table in &self.sstables.tables {
+        for table in &self.sstables.l0 {
             // println!("{:?}", table.path);
-            let data= read_sstable(&table.path).expect("Scan Failed!");
+            let data= read_sstable(&table.path).expect("Scan of L0 Failed!");
+            sources.push(data);
+        }
+
+        for table in &self.sstables.l1 {
+            let data = read_sstable(&table.path).expect("Scan of L1 failed");
+            sources.push(data);
+        }
+
+        for table in &self.sstables.l2 {
+            let data = read_sstable(&table.path).expect("Scan of L2 failed");
             sources.push(data);
         }
 
@@ -238,7 +282,7 @@ impl Engine {
         while let Some(item)= heap.pop() {
             // println!("{:?}", item);
             if item.key.as_str() >= start && item.key.as_str() < end {
-                merged.insert(item.key.clone(), item.val.clone());
+                merged.entry(item.key.clone()).or_insert(item.val.clone());
             }
             let src= item.source_idx;
 
@@ -263,3 +307,94 @@ impl Engine {
     
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::{command::Command, engine::{Engine, Value}};
+
+    #[test]
+    fn test_auto_flush_when_memtable_limit_reached() {
+        let mut engine = Engine::new();
+
+        // Small threshold so flush happens quickly
+        engine.memtable_limit = 2;
+
+        engine.execute(
+            Command::Set(
+                "a".to_string(),
+                "1".to_string(),
+            )
+        );
+
+        // Still in memtable
+        assert_eq!(engine.memtable.len(), 1);
+        assert_eq!(engine.sstables.l0.len(), 0);
+
+        engine.execute(
+            Command::Set(
+                "b".to_string(),
+                "2".to_string(),
+            )
+        );
+
+        // Auto flush should have happened
+        assert_eq!(engine.memtable.len(), 0);
+        assert_eq!(engine.sstables.l0.len(), 1);
+
+        // Data must still be readable
+        match engine.get_key("a") {
+            Some(Value::Data(v)) => assert_eq!(v, "1"),
+            _ => panic!("expected value 1"),
+        }
+
+        match engine.get_key("b") {
+            Some(Value::Data(v)) => assert_eq!(v, "2"),
+            _ => panic!("expected value 2"),
+        }
+
+        // Cleanup generated SSTable
+        std::fs::remove_file(
+            &engine.sstables.l0[0].path
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_auto_flush_preserves_tombstones() {
+        let mut engine = Engine::new();
+
+        engine.memtable_limit = 2;
+
+        engine.execute(
+            Command::Set(
+                "user".to_string(),
+                "john".to_string(),
+            )
+        );
+
+        engine.execute(
+            Command::Del(
+                "user".to_string()
+            )
+        );
+        
+        engine.execute(Command::Set(
+            "another".to_string(),
+            "x".to_string(),
+        ));
+
+        // Flush should have happened
+        // assert_eq!(engine.memtable.len(), 0);
+        assert_eq!(engine.sstables.l0.len(), 1);
+
+        match engine.get_key("user") {
+            Some(Value::Tombstone) => {}
+            _ => panic!("expected tombstone"),
+        }
+
+        std::fs::remove_file(
+            &engine.sstables.l0[0].path
+        )
+        .unwrap();
+    }
+
+}

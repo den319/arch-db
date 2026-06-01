@@ -14,6 +14,8 @@ use command::Command;
 use storage::Storage;
 use sstable_manager::discover_sstables;
 
+use crate::sstable_manager::Level;
+
 fn main() {
     let mut engine= Engine::new();
 
@@ -27,15 +29,27 @@ fn main() {
         let name= entry.file_name();
         let name= name.to_string_lossy();
 
+        if !name.ends_with(".bin") {
+            continue;
+        }
+
+        let level= if name.starts_with("sst_l0_") {
+            Level::L0
+        } else if name.starts_with("sst_l1_") {
+            Level::L1
+        } else if name.starts_with("sst_l2_") {
+            Level::L2
+        } else {
+            continue;
+        };
+
         if name.starts_with("sst_") && name.ends_with(".bin") {
-            engine.sstables.load_from_file(&name);
+            engine.sstables.load_from_file(&name, level);
         }
     }
     let mut storage= Storage::new("db.log").expect("Failed to intialize storage!");
 
     let commands= storage.load().expect("Failed to load database!");
-
-    let mut sstable_id= discover_sstables();
 
     for command in commands {
 
@@ -63,21 +77,33 @@ fn main() {
                 storage.append(&command).expect("Failed to write log!");
             }
             Command::Exit => {
-                let file= format!("sst_{}.bin", sstable_id);
-                sstable_id += 1;
-
-                if let Err(e) = engine.flush_to_sstable(&file) {
-                    println!("Flush failed: {}", e);
+                if !engine.memtable.is_empty() {
+                    let file= format!("sst_l0_{}.bin", discover_sstables());
+    
+                    match engine.flush_to_sstable(&file) {
+                        Ok(_) => {
+                            storage.reset()
+                                .expect("Failed to reset WAL");
+                        }
+                        Err(e) => {
+                            println!("Flush failed: {}", e);
+                        }
+                    }
+                    println!("Bye!");
+                    break;
                 }
-                println!("Bye!");
-                break;
             }
             _=>{}
         }
 
+        let is_write = matches!(command, Command::Set(_, _) | Command::Del(_));
+
         if let Some(output) = engine.execute(command) {
             println!("{}", output);
         }
-        
+
+        if is_write {
+            engine.maybe_flush().expect("Flush failed!");
+        }
     }
 }
