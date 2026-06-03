@@ -1,8 +1,8 @@
-use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}};
+use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs};
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, discover_sstables}, storage::Storage};
+use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
 
 
 #[derive(Clone, Debug)]
@@ -68,7 +68,7 @@ impl Engine {
             Command::Get(key) => {
                 self.get_key(&key).map(|v| match v {
                     Value::Data(d) => {
-                        return d;                        
+                        d                       
                     },
                     Value::Tombstone => "Key not found!".to_string(),
                 })
@@ -82,7 +82,7 @@ impl Engine {
             }
             Command::Exit => {
                 if self.memtable_size() > 0 {
-                    let sstable_id = discover_sstables();
+                    let sstable_id = next_sstable_id();
                     let file = format!("sst_l0_{}.bin", sstable_id);
                     if let Err(e) = self.flush_to_sstable(&file) {
                         return Some(format!("flush failed: {}", e));
@@ -98,7 +98,7 @@ impl Engine {
             Command::Compact => {
                 // Flush memtable to SSTable first, then compact
                 if self.memtable_size() > 0 {
-                    let sstable_id = discover_sstables();
+                    let sstable_id = next_sstable_id();
                     let file = format!("sst_l0_{}.bin", sstable_id);
                     if let Err(e) = self.flush_to_sstable(&file) {
                         return Some(format!("flush failed: {}", e));
@@ -142,18 +142,25 @@ impl Engine {
         // println!("{:?}", path);
         let index=  write_sstable(path, &data)?;
 
+        let min_key= data.first().map(|(k, _)|k.clone()).unwrap();
+
+        let max_key= data.last().map(|(k, _)|k.clone()).unwrap();
+
+        let file_size= fs::metadata(&path)?.len();
+
         self.sstables.add_table(
             SSTable {
                 path: path.to_string(),
                 index,
                 bloom,
                 level: Level::L0,
+                max_key,
+                min_key,
+                file_size
             }
         );
 
-        if self.sstables.l0.len() >= 4 {
-            let _= self.sstables.compact_l0_to_l1();
-        }
+        self.sstables.maybe_compact()?;
         
         self.memtable.clear();
 
@@ -186,6 +193,10 @@ impl Engine {
     pub fn search_level(level: &[SSTable], key:&str) -> Option<Value> {
         for table in level.iter().rev() {
             println!("table index: {:?}", table.index);
+
+            if !table.contains_key_range(key) {
+                continue;
+            }
             
             println!("bloom check: {} -> {}", key, table.bloom.contains(&key));
             if !table.bloom.contains(&key) {
@@ -218,7 +229,7 @@ impl Engine {
     pub fn maybe_flush(&mut self) -> Result<()> {
 
         if self.memtable.len() >= self.memtable_limit {
-            let path = format!("sst_l0_{}.bin",discover_sstables());
+            let path = format!("sst_l0_{}.bin",next_sstable_id());
     
             self.flush_to_sstable(&path)?;
         }
@@ -266,7 +277,7 @@ impl Engine {
         for (src_idx, source) in sources.iter().enumerate() {
             // println!("{:?} source:{:?} data: {:?}", src_idx, source, source.get(1));
 
-            if let Some((k,v))= source.get(0) {
+            if let Some((k,v))= source.first() {
                 heap.push(HeapItem {
                     key: k.clone(),
                     val: v.clone(),
@@ -376,7 +387,7 @@ mod tests {
                 "user".to_string()
             )
         );
-        
+
         engine.execute(Command::Set(
             "another".to_string(),
             "x".to_string(),

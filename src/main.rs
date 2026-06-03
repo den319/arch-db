@@ -5,6 +5,7 @@ mod storage;
 mod error;
 mod sstable;
 mod sstable_manager;
+mod helper;
 
 use std::{fs, io::{self, Write}};
 
@@ -12,11 +13,12 @@ use engine::Engine;
 use parser::parse;
 use command::Command;
 use storage::Storage;
-use sstable_manager::discover_sstables;
 
-use crate::sstable_manager::Level;
+use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id};
 
 fn main() {
+    init_sstable_counter();
+
     let mut engine= Engine::new();
 
     let entries= fs::read_dir(".").expect("Failed to read directory to load data!");
@@ -78,7 +80,7 @@ fn main() {
             }
             Command::Exit => {
                 if !engine.memtable.is_empty() {
-                    let file= format!("sst_l0_{}.bin", discover_sstables());
+                    let file= format!("sst_l0_{}.bin", next_sstable_id());
     
                     match engine.flush_to_sstable(&file) {
                         Ok(_) => {

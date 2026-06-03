@@ -1,7 +1,7 @@
 use crate::command::Command;
 
 pub fn parse(input: &str) -> Command {
-    let parts:Vec<&str>= input.trim().split_whitespace().collect();
+    let parts:Vec<&str>= input.split_whitespace().collect();
 
     if parts.is_empty() {
         return Command::Invalid;

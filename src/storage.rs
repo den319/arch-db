@@ -20,17 +20,17 @@ impl Storage {
     pub fn append(&mut self, command:&Command) -> Result<()> {
         let bytes= command.serialize();
 
-        self.file.write_all(&bytes);
+        self.file.write_all(&bytes)?;
         self.file.flush()?;
 
         Ok(())
     }
 
     pub fn load(&mut self) -> Result<Vec<Command>> {
-        self.file.seek(SeekFrom::Start(0));
+        self.file.seek(SeekFrom::Start(0))?;
 
         let mut bytes= Vec::new();
-        self.file.read_to_end(&mut bytes);
+        self.file.read_to_end(&mut bytes)?;
 
         let mut commands= Vec::new();
 
@@ -60,7 +60,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::Command;
+    use crate::{command::Command, helper::unique_file};
 
     #[test]
     fn test_wal_reset() {
@@ -130,10 +130,10 @@ fn test_wal_recovery_after_restart() {
 
 #[test]
 fn test_wal_rotation_after_flush() {
-    let path = "test_rotation.log";
+    let path = unique_file("test_rotation", "log");
 
     let mut storage =
-        Storage::new(path).unwrap();
+        Storage::new(&path).unwrap();
 
     storage
         .append(&Command::Set(

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs::File, io::{Read, Seek, SeekFrom, Write}};
 
-use crate::{engine::Value, error::Result};
+use crate::{engine::Value, error::Result, sstable_manager::SSTable};
 
 #[derive(Debug)]
 pub struct BlockMeta {
@@ -15,6 +15,16 @@ pub struct SSTableIndex {
 }
 
 pub const BLOCK_SIZE: usize = 40;
+
+impl SSTable {
+    pub fn overlaps(&self, min_key: &str, max_key:&str) -> bool {
+        !(self.max_key.as_str() < min_key || self.min_key.as_str() > max_key)
+    }
+
+    pub fn contains_key_range(&self, key:&str) -> bool {
+        key >= self.min_key.as_str() && key <= self.max_key.as_str()
+    }
+}
 
 pub fn write_sstable(
     path:&str, 
@@ -250,7 +260,11 @@ pub fn find_block<'a>(index: &'a SSTableIndex, key:&str) -> Option<&'a BlockMeta
 #[cfg(test)]
 mod tests {
 
-    use super::*;
+    use bloom::BloomFilter;
+
+use crate::sstable_manager::Level;
+
+use super::*;
     use std::fs;
 
     fn sample_data() -> Vec<(String, Value)> {
@@ -410,5 +424,29 @@ mod tests {
         assert!(found);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_overlap_detection() {
+        let table = SSTable {
+            path: String::new(),
+            index: SSTableIndex {
+                offsets: BTreeMap::new(),
+                blocks: vec![],
+            },
+            bloom: BloomFilter::with_rate(0.01, 8),
+            level: Level::L1,
+
+            min_key: "a".to_string(),
+            max_key: "f".to_string(),
+            file_size: 0,
+        };
+
+        assert!(table.overlaps("c", "z"));
+        assert!(table.overlaps("a", "f"));
+        assert!(table.overlaps("e", "g"));
+
+        assert!(!table.overlaps("g", "z"));
+        assert!(!table.overlaps("x", "z"));
     }
 }
