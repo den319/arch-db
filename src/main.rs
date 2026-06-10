@@ -91,9 +91,9 @@ fn main() {
                             println!("Flush failed: {}", e);
                         }
                     }
-                    println!("Bye!");
-                    break;
                 }
+                println!("Bye!");
+                break;
             }
             _=>{}
         }

@@ -160,6 +160,10 @@ impl Engine {
             }
         );
 
+        if self.sstables.l0.len() >= 4 {
+            self.sstables.compact_l0_to_l1()?;
+        }
+
         self.sstables.maybe_compact()?;
         
         self.memtable.clear();
@@ -320,7 +324,7 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use crate::{command::Command, engine::{Engine, Value}};
+    use crate::{command::Command, engine::{Engine, Value}, helper::unique_file};
 
     #[test]
     fn test_auto_flush_when_memtable_limit_reached() {
@@ -407,5 +411,43 @@ mod tests {
         )
         .unwrap();
     }
+
+    #[test]
+    fn test_auto_l0_compaction_trigger() {
+        let mut engine = Engine::new();
+        let file1= unique_file("test_auto_l0_compaction_trigger", "bin");
+
+        for i in 0..12 {
+            engine.execute(
+                Command::Set(
+                    format!("key{}", i),
+                    format!("value{}", i)
+                )
+            );
+
+            engine.flush_to_sstable(&file1).unwrap();
+        }
+
+        println!("{:?}", engine.sstables.l0.len());
+
+        assert!(engine.sstables.l0.len() < 4);
+        assert!(!engine.sstables.l1.is_empty());
+
+        // Cleanup all files created by flush_to_sstable, including compaction artifacts
+        let all_paths: Vec<String> = engine.sstables.l0.iter()
+            .chain(engine.sstables.l1.iter())
+            .chain(engine.sstables.l2.iter())
+            .map(|t| t.path.clone())
+            .collect();
+        
+        // Also clean up the original file if it exists
+        let _ = std::fs::remove_file(&file1);
+        
+        for path in all_paths {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+
 
 }
