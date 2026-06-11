@@ -46,7 +46,7 @@ fn main() {
         };
 
         if name.starts_with("sst_") && name.ends_with(".bin") {
-            engine.sstables.load_from_file(&name, level);
+            engine.sstables.lock().unwrap().load_from_file(&name, level);
         }
     }
     let mut storage= Storage::new("db.log").expect("Failed to intialize storage!");

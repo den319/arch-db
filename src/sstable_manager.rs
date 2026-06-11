@@ -44,6 +44,8 @@ pub struct SSTable {
 static SSTABLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const L1_COMPACTION_THRESHOLD: usize = 4;
+const SIZE_TIERED_MIN_TABLES: usize = 3;
+const SIZE_TIERED_SIZE_RATIO: f64 = 1.5;
 
 impl SSTableManager {
     pub fn new() -> Self {
@@ -59,7 +61,7 @@ impl SSTableManager {
         match self.strategy {
             CompactionStrategy::Leveled => {
                 if self.l0.len() >= 4 {
-                    self.compact_l0_to_l1()?;
+                    self.size_tiered_compact_l0()?;
                 }
 
                 if self.l1.len() >= 4 {
@@ -81,6 +83,31 @@ impl SSTableManager {
             Level::L1 => self.l1.push(table),
             Level::L2 => self.l2.push(table),
         }
+    }
+
+    fn find_size_tiered_candidates(&self) -> Vec<usize> {
+        if self.l0.len() < SIZE_TIERED_MIN_TABLES {
+            return vec![];
+        }
+
+        let mut indexed: Vec<(usize, u64)> = self.l0
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (i, t.file_size))
+            .collect();
+
+        indexed.sort_by_key(|(_, size)| *size);
+
+        for window in indexed.windows(SIZE_TIERED_MIN_TABLES) {
+            let min = window.first().unwrap().1 as f64;
+            let max = window.last().unwrap().1 as f64;
+
+            if max / min <= SIZE_TIERED_SIZE_RATIO {
+                return window.iter().map(|(idx, _)| *idx).collect();
+            }
+        }
+
+        vec![]
     }
 
     pub fn load_table(&self, table: &SSTable) -> Result<BTreeMap<String, Value>> {
@@ -429,6 +456,81 @@ impl SSTableManager {
 
         Ok(())
     }
+
+    pub fn size_tiered_compact_l0(&mut self) -> Result<()> {
+        let candidates = self.find_size_tiered_candidates();
+
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let mut merged = BTreeMap::<String, Value>::new();
+
+        // Iterate candidates in ascending L0 index order (oldest first), so that
+        // newer files (higher index) overwrite older ones via BTreeMap::insert.
+        let mut indexed_candidates = candidates.clone();
+        indexed_candidates.sort();
+        for idx in &indexed_candidates {
+            let table = &self.l0[*idx];
+
+            let data = read_sstable(&table.path)?;
+
+            for (k, v) in data {
+                merged.insert(k, v);
+            }
+        }
+
+        let sorted: Vec<_> = merged.into_iter().collect();
+
+        let path = format!("sst_l1_{}.bin", next_sstable_id());
+
+        let index = write_sstable(&path, &sorted)?;
+
+        let file_size = fs::metadata(&path)?.len();
+
+        let mut bloom = BloomFilter::with_rate(
+            0.01,
+            sorted.len().max(8) as u32
+        );
+
+        for (k, _) in &sorted {
+            bloom.insert(k);
+        }
+
+        let min_key = sorted.first()
+            .map(|(k, _)| k.clone())
+            .unwrap();
+
+        let max_key = sorted.last()
+            .map(|(k, _)| k.clone())
+            .unwrap();
+
+        let table = SSTable {
+            path: path.clone(),
+            index,
+            bloom,
+            level: Level::L1,
+            min_key,
+            max_key,
+            file_size,
+        };
+
+        // Remove candidates in descending index order so that
+        // removing one doesn't shift the indices of remaining candidates.
+        let mut sorted_candidates = candidates.clone();
+        sorted_candidates.sort_by(|a, b| b.cmp(a));
+        for idx in sorted_candidates {
+            let old = self.l0.remove(idx);
+
+            fs::remove_file(old.path)?;
+        }
+
+        self.l1.push(table);
+
+        Ok(())
+    }
+
+
 }
 
 
@@ -499,6 +601,7 @@ mod tests {
     fn test_compact_l0_to_l1() {
         let mut manager = SSTableManager::new();
 
+        // Size-tiered compaction needs at least 3 files of similar size
         let data1 = vec![
             ("a".to_string(), Value::Data("1".to_string())),
             ("b".to_string(), Value::Data("2".to_string())),
@@ -509,12 +612,19 @@ mod tests {
             ("d".to_string(), Value::Data("4".to_string())),
         ];
 
+        let data3 = vec![
+            ("e".to_string(), Value::Data("5".to_string())),
+            ("f".to_string(), Value::Data("6".to_string())),
+        ];
+
         let file1= unique_file("test_compact_l0_to_l1_test_l0_1", "bin");
         let file2= unique_file("test_compact_l0_to_l1_test_l0_2", "bin");
+        let file3= unique_file("test_compact_l0_to_l1_test_l0_3", "bin");
 
 
         let index1 = write_sstable(&file1, &data1).unwrap();
         let index2 = write_sstable(&file2, &data2).unwrap();
+        let index3 = write_sstable(&file3, &data3).unwrap();
 
         let mut bloom1 = BloomFilter::with_rate(0.01, 8);
         bloom1.insert(&"a");
@@ -524,8 +634,13 @@ mod tests {
         bloom2.insert(&"c");
         bloom2.insert(&"d");
 
+        let mut bloom3 = BloomFilter::with_rate(0.01, 8);
+        bloom3.insert(&"e");
+        bloom3.insert(&"f");
+
         let file1_size = fs::metadata(&file1).expect("Failed to read metadata of file-1").len();
         let file2_size = fs::metadata(&file2).expect("Failed to read metadata of file-2").len();
+        let file3_size = fs::metadata(&file3).expect("Failed to read metadata of file-3").len();
 
 
         manager.l0.push(SSTable {
@@ -549,7 +664,17 @@ mod tests {
             file_size: file2_size,
         });
 
-        manager.compact_l0_to_l1().unwrap();
+        manager.l0.push(SSTable {
+            path: file3,
+            index: index3,
+            bloom: bloom3,
+            level: Level::L0,
+            min_key: "e".to_string(),
+            max_key: "f".to_string(),
+            file_size: file3_size,
+        });
+
+        manager.size_tiered_compact_l0().unwrap();
 
         assert_eq!(manager.l0.len(), 0);
         assert_eq!(manager.l1.len(), 1);
@@ -561,6 +686,7 @@ mod tests {
     fn test_l0_compaction_keeps_latest_value() {
         let mut manager = SSTableManager::new();
 
+        // Size-tiered compaction needs at least 3 files of similar size
         let old_data = vec![
             ("user".to_string(), Value::Data("old".to_string()))
         ];
@@ -569,11 +695,17 @@ mod tests {
             ("user".to_string(), Value::Data("new".to_string()))
         ];
 
+        let filler_data = vec![
+            ("other".to_string(), Value::Data("val".to_string()))
+        ];
+
         let test_old_file= unique_file("test_l0_compaction_keeps_latest_value_test_old", "bin");
         let test_new_file= unique_file("test_l0_compaction_keeps_latest_value_test_new", "bin");
+        let test_filler_file= unique_file("test_l0_compaction_keeps_latest_value_filler", "bin");
 
         let index1 = write_sstable(&test_old_file, &old_data).unwrap();
         let index2 = write_sstable(&test_new_file, &new_data).unwrap();
+        let index3 = write_sstable(&test_filler_file, &filler_data).unwrap();
 
         let mut bloom1 = BloomFilter::with_rate(0.01, 8);
         bloom1.insert(&"user");
@@ -581,8 +713,12 @@ mod tests {
         let mut bloom2 = BloomFilter::with_rate(0.01, 8);
         bloom2.insert(&"user");
 
+        let mut bloom3 = BloomFilter::with_rate(0.01, 8);
+        bloom3.insert(&"other");
+
         let file_old_size = fs::metadata(&test_old_file).expect("Failed to read metadata of old file").len();
         let file_new_size = fs::metadata(&test_new_file).expect("Failed to read metadata of new file").len();
+        let file_filler_size = fs::metadata(&test_filler_file).expect("Failed to read metadata of filler file").len();
 
 
         manager.l0.push(SSTable {
@@ -605,7 +741,17 @@ mod tests {
             file_size: file_new_size,
         });
 
-        manager.compact_l0_to_l1().unwrap();
+        manager.l0.push(SSTable {
+            path: test_filler_file,
+            index: index3,
+            bloom: bloom3,
+            level: Level::L0,
+            min_key: "other".to_string(),
+            max_key: "other".to_string(),
+            file_size: file_filler_size,
+        });
+
+        manager.size_tiered_compact_l0().unwrap();
 
         let table = &manager.l1[0];
 
@@ -627,40 +773,71 @@ mod tests {
     fn test_tombstone_survives_compaction() {
         let mut manager = SSTableManager::new();
 
-        let old_data = vec![
-            ("user".to_string(), Value::Data("john".to_string()))
+        // Size-tiered compaction needs at least 3 files of similar size.
+        // Use identical data in all files (same key, different values) to ensure
+        // files sizes are within the 1.5x ratio.
+        let base_data1 = vec![
+            ("user".to_string(), Value::Data("john".to_string())),
+            ("a".to_string(), Value::Data("x".to_string())),
         ];
 
-        let deleted_data = vec![
-            ("user".to_string(), Value::Tombstone)
+        let base_data2 = vec![
+            ("user".to_string(), Value::Tombstone),
+            ("a".to_string(), Value::Data("x".to_string())),
+        ];
+
+        let base_data3 = vec![
+            ("user".to_string(), Value::Data("other".to_string())),
+            ("a".to_string(), Value::Data("x".to_string())),
         ];
 
         let file1= unique_file("test_tombstone_survives_compaction_data", "bin");
         let file2= unique_file("test_tombstone_survives_compaction_delete", "bin");
+        let file3= unique_file("test_tombstone_survives_compaction_filler", "bin");
         
 
-        let index1 = write_sstable(&file1, &old_data).unwrap();
-        let index2 = write_sstable(&file2, &deleted_data).unwrap();
+        let index1 = write_sstable(&file1, &base_data1).unwrap();
+        let index2 = write_sstable(&file2, &base_data2).unwrap();
+        let index3 = write_sstable(&file3, &base_data3).unwrap();
 
         let mut bloom1 = BloomFilter::with_rate(0.01, 8);
         bloom1.insert(&"user");
+        bloom1.insert(&"a");
 
         let mut bloom2 = BloomFilter::with_rate(0.01, 8);
         bloom2.insert(&"user");
+        bloom2.insert(&"a");
+
+        let mut bloom3 = BloomFilter::with_rate(0.01, 8);
+        bloom3.insert(&"user");
+        bloom3.insert(&"a");
 
         let file1_size = fs::metadata(&file1).expect("Failed to read metadata of file-1").len();
         let file2_size = fs::metadata(&file2).expect("Failed to read metadata of file-2").len();
+        let file3_size = fs::metadata(&file3).expect("Failed to read metadata of file-3").len();
 
 
+        // Push in order: oldest first. The tombstone file (file2) is last (newest),
+        // so its tombstone for "user" should overwrite earlier data for "user".
         manager.l0.push(SSTable {
             path: file1,
             index: index1,
             bloom: bloom1,
             level: Level::L0,
-            min_key: "user".to_string(),
+            min_key: "a".to_string(),
             max_key: "user".to_string(),
             file_size: file1_size,
 
+        });
+
+        manager.l0.push(SSTable {
+            path: file3,
+            index: index3,
+            bloom: bloom3,
+            level: Level::L0,
+            min_key: "a".to_string(),
+            max_key: "user".to_string(),
+            file_size: file3_size,
         });
 
         manager.l0.push(SSTable {
@@ -668,12 +845,12 @@ mod tests {
             index: index2,
             bloom: bloom2,
             level: Level::L0,
-            min_key: "user".to_string(),
+            min_key: "a".to_string(),
             max_key: "user".to_string(),
             file_size: file2_size,
         });
 
-        manager.compact_l0_to_l1().unwrap();
+        manager.size_tiered_compact_l0().unwrap();
 
         let table = &manager.l1[0];
 
@@ -690,7 +867,15 @@ mod tests {
             _ => panic!("expected tombstone"),
         }
 
-        std::fs::remove_file(&table.path).unwrap();
+        // Cleanup all L0 and L1 files
+        let cleanup_paths: Vec<String> = manager.l0.iter()
+            .chain(manager.l1.iter())
+            .chain(manager.l2.iter())
+            .map(|t| t.path.clone())
+            .collect();
+        for p in cleanup_paths {
+            let _ = std::fs::remove_file(&p);
+        }
     }
 
     #[test]
@@ -1058,7 +1243,10 @@ mod tests {
     fn test_maybe_compact_triggers_l0_to_l1() {
         let mut manager = SSTableManager::new();
 
-        for i in 0..4 {
+        // With size-tiered compaction, we need 4 L0 files.
+        // Only 3 candidates are selected and removed, leaving 1 behind.
+        // Push 5 files so that after removing 3 we still get exactly 1 L1 result.
+        for i in 0..5 {
 
             let data = vec![
                 (
@@ -1089,10 +1277,12 @@ mod tests {
 
         manager.maybe_compact().unwrap();
 
-        assert_eq!(manager.l0.len(), 0);
+        // size-tiered removes 3 candidates, leaving the rest
+        assert_eq!(manager.l0.len(), 2);
         assert_eq!(manager.l1.len(), 1);
 
-        for table in &manager.l1 {
+        // Cleanup all files
+        for table in manager.l0.iter().chain(manager.l1.iter()) {
             let _ = fs::remove_file(&table.path);
         }
     }
@@ -1116,6 +1306,32 @@ mod tests {
 
         fs::remove_file(file).unwrap();
     }
+    #[test]
+    fn test_size_tiered_candidate_selection() {
+        let mut manager = SSTableManager::new();
+
+        for i in 0..3 {
+            manager.l0.push(SSTable {
+                path: format!("t{}.bin", i),
+                index: SSTableIndex {
+                    offsets: BTreeMap::new(),
+                    blocks: vec![],
+                },
+                bloom: BloomFilter::with_rate(0.01, 8),
+                level: Level::L0,
+                min_key: "a".to_string(),
+                max_key: "z".to_string(),
+                file_size: 100,
+            });
+        }
+
+        let candidates = manager.find_size_tiered_candidates();
+
+        assert_eq!(candidates.len(), 3);
+    }
+
+
+
 
 }
 

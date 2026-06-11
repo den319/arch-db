@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs};
+use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync::{Arc, Mutex}};
 
 use bloom::{ASMS, BloomFilter};
 
@@ -13,7 +13,7 @@ pub enum Value {
 
 pub struct Engine {
     pub(crate) memtable: BTreeMap<String, Value>,
-    pub(crate) sstables: SSTableManager,
+    pub(crate) sstables: Arc<Mutex<SSTableManager>>,
     pub(crate) memtable_limit: usize,
 }
 
@@ -50,7 +50,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             memtable: BTreeMap::new(),
-            sstables: SSTableManager::new(),
+            sstables: Arc::new(Mutex::new(SSTableManager::new())),
             memtable_limit: 1000,
         }
     }
@@ -160,11 +160,13 @@ impl Engine {
             }
         );
 
-        if self.sstables.l0.len() >= 4 {
-            self.sstables.compact_l0_to_l1()?;
+        let sstables = self.sstables.lock().unwrap();
+
+        if sstables.l0.len() >= 4 {
+            sstables.size_tiered_compact_l0()?;
         }
 
-        self.sstables.maybe_compact()?;
+        sstables.maybe_compact()?;
         
         self.memtable.clear();
 
@@ -178,16 +180,18 @@ impl Engine {
             // println!("{:?}", val);
             return Some(val.clone());
         }
+        let sstables = self.sstables.lock().unwrap();
 
-        if let Some(v) = Self::search_level(&self.sstables.l0, key) {
+
+        if let Some(v) = Self::search_level(&sstables.l0, key) {
             return Some(v);
         }
 
-        if let Some(v) = Self::search_level(&self.sstables.l1, key) {
+        if let Some(v) = Self::search_level(&sstables.l1, key) {
             return Some(v);
         }   
 
-        if let Some(v) = Self::search_level(&self.sstables.l2, key) {
+        if let Some(v) = Self::search_level(&sstables.l2, key) {
             return Some(v);
         }
 
@@ -255,8 +259,9 @@ impl Engine {
 
         sources.push(mem_data);
 
+        let sstables = self.sstables.lock().unwrap();
         // SSTable
-        for table in &self.sstables.l0 {
+        for table in &sstables.l0 {
             // println!("{:?}", table.path);
             let data= read_sstable(&table.path).expect("Scan of L0 Failed!");
             sources.push(data);
@@ -324,10 +329,23 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use crate::{command::Command, engine::{Engine, Value}, helper::unique_file};
+    use std::sync::OnceLock;
+
+    use crate::{command::Command, engine::{Engine, Value}, helper::unique_file, sstable_manager::init_sstable_counter};
+
+    /// Initialize the global SSTABLE_COUNTER exactly once across all parallel tests,
+    /// ensuring no test creates files that collide with each other or with user data.
+    fn ensure_counter_initialized() {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            init_sstable_counter();
+        });
+    }
 
     #[test]
     fn test_auto_flush_when_memtable_limit_reached() {
+        ensure_counter_initialized();
+
         let mut engine = Engine::new();
 
         // Small threshold so flush happens quickly
@@ -340,9 +358,11 @@ mod tests {
             )
         );
 
+        let sstables = engine.sstables.lock().unwrap();
+
         // Still in memtable
         assert_eq!(engine.memtable.len(), 1);
-        assert_eq!(engine.sstables.l0.len(), 0);
+        assert_eq!(sstables.l0.len(), 0);
 
         engine.execute(
             Command::Set(
@@ -351,9 +371,11 @@ mod tests {
             )
         );
 
+        let sstables1 = engine.sstables.lock().unwrap();
+
         // Auto flush should have happened
         assert_eq!(engine.memtable.len(), 0);
-        assert_eq!(engine.sstables.l0.len(), 1);
+        assert_eq!(sstables1.l0.len(), 1);
 
         // Data must still be readable
         match engine.get_key("a") {
@@ -368,13 +390,15 @@ mod tests {
 
         // Cleanup generated SSTable
         std::fs::remove_file(
-            &engine.sstables.l0[0].path
+            &sstables1.l0[0].path
         )
         .unwrap();
     }
 
     #[test]
     fn test_auto_flush_preserves_tombstones() {
+        ensure_counter_initialized();
+
         let mut engine = Engine::new();
 
         engine.memtable_limit = 2;
@@ -397,9 +421,11 @@ mod tests {
             "x".to_string(),
         ));
 
+        let sstables = engine.sstables.lock().unwrap();
+
         // Flush should have happened
         // assert_eq!(engine.memtable.len(), 0);
-        assert_eq!(engine.sstables.l0.len(), 1);
+        assert_eq!(sstables.l0.len(), 1);
 
         match engine.get_key("user") {
             Some(Value::Tombstone) => {}
@@ -407,15 +433,16 @@ mod tests {
         }
 
         std::fs::remove_file(
-            &engine.sstables.l0[0].path
+            &sstables.l0[0].path
         )
         .unwrap();
     }
 
     #[test]
     fn test_auto_l0_compaction_trigger() {
+        ensure_counter_initialized();
+
         let mut engine = Engine::new();
-        let file1= unique_file("test_auto_l0_compaction_trigger", "bin");
 
         for i in 0..12 {
             engine.execute(
@@ -425,29 +452,223 @@ mod tests {
                 )
             );
 
-            engine.flush_to_sstable(&file1).unwrap();
+            // Use a unique file for each flush; size-tiered compaction needs
+            // at least 3 files, and reusing the same file would get it deleted
+            let file = unique_file("test_auto_l0_compaction_trigger", "bin");
+            engine.flush_to_sstable(&file).unwrap();
         }
 
-        println!("{:?}", engine.sstables.l0.len());
+        let sstables = engine.sstables.lock().unwrap();
 
-        assert!(engine.sstables.l0.len() < 4);
+        assert!(sstables.l0.len() < 4);
         assert!(!engine.sstables.l1.is_empty());
 
         // Cleanup all files created by flush_to_sstable, including compaction artifacts
-        let all_paths: Vec<String> = engine.sstables.l0.iter()
+        let all_paths: Vec<String> = sstables.l0.iter()
             .chain(engine.sstables.l1.iter())
             .chain(engine.sstables.l2.iter())
             .map(|t| t.path.clone())
             .collect();
-        
-        // Also clean up the original file if it exists
-        let _ = std::fs::remove_file(&file1);
         
         for path in all_paths {
             let _ = std::fs::remove_file(&path);
         }
     }
 
+    #[test]
+    fn test_shared_sstable_manager_access() {
+        ensure_counter_initialized();
+
+        let engine = Engine::new();
+
+        {
+            let sstables =
+                engine.sstables.lock().unwrap();
+
+            assert_eq!(sstables.l0.len(), 0);
+            assert_eq!(sstables.l1.len(), 0);
+            assert_eq!(sstables.l2.len(), 0);
+        }
+    }
 
 
+    #[test]
+fn test_flush_with_shared_sstable_manager() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine.memtable_limit = 2;
+
+    engine.execute(
+        Command::Set(
+            "a".to_string(),
+            "1".to_string(),
+        )
+    );
+
+    engine.execute(
+        Command::Set(
+            "b".to_string(),
+            "2".to_string(),
+        )
+    );
+
+    {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        assert_eq!(sstables.l0.len(), 1);
+    }
+
+    match engine.get_key("a") {
+        Some(Value::Data(v)) => {
+            assert_eq!(v, "1");
+        }
+        _ => panic!("expected value"),
+    }
+
+    let paths: Vec<String> = {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        sstables
+            .l0
+            .iter()
+            .map(|t| t.path.clone())
+            .collect()
+    };
+
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn test_arc_shares_same_sstable_manager() {
+    ensure_counter_initialized();
+
+    let engine = Engine::new();
+
+    let shared1 = engine.sstables.clone();
+    let shared2 = engine.sstables.clone();
+
+    {
+        let mut s1 =
+            shared1.lock().unwrap();
+
+        s1.l0.push(
+            SSTable {
+                path: "dummy.bin".to_string(),
+
+                index: crate::sstable::SSTableIndex {
+                    offsets: Default::default(),
+                    blocks: vec![],
+                },
+
+                bloom: bloom::BloomFilter::with_rate(0.01, 8),
+
+                level: crate::sstable_manager::Level::L0,
+
+                min_key: "a".to_string(),
+                max_key: "z".to_string(),
+
+                file_size: 0,
+            }
+        );
+    }
+
+    {
+        let s2 =
+            shared2.lock().unwrap();
+
+        assert_eq!(s2.l0.len(), 1);
+    }
+}
+
+#[test]
+fn test_multiple_lock_scopes() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine.execute(
+        Command::Set(
+            "name".to_string(),
+            "dharmik".to_string(),
+        )
+    );
+
+    {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        let _ = sstables.l0.len();
+    }
+
+    {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        let _ = sstables.l1.len();
+    }
+
+    match engine.get_key("name") {
+        Some(Value::Data(v)) => {
+            assert_eq!(v, "dharmik");
+        }
+        _ => panic!("expected value"),
+    }
+}
+
+#[test]
+fn test_compaction_with_shared_manager() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    for i in 0..12 {
+        engine.execute(
+            Command::Set(
+                format!("key{}", i),
+                format!("value{}", i),
+            )
+        );
+
+        let file =
+            unique_file(
+                "shared_compaction",
+                "bin"
+            );
+
+        engine.flush_to_sstable(&file)
+            .unwrap();
+    }
+
+    {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        assert!(sstables.l0.len() < 4);
+
+        assert!(!sstables.l1.is_empty());
+    }
+
+    let paths: Vec<String> = {
+        let sstables =
+            engine.sstables.lock().unwrap();
+
+        sstables
+            .l0
+            .iter()
+            .chain(sstables.l1.iter())
+            .chain(sstables.l2.iter())
+            .map(|t| t.path.clone())
+            .collect()
+    };
+
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
 }

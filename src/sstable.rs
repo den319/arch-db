@@ -16,6 +16,7 @@ pub struct SSTableIndex {
 
 pub const BLOCK_SIZE: usize = 40;
 
+
 impl SSTable {
     pub fn overlaps(&self, min_key: &str, max_key:&str) -> bool {
         !(self.max_key.as_str() < min_key || self.min_key.as_str() > max_key)
