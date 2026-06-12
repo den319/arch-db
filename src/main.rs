@@ -9,6 +9,7 @@ mod helper;
 
 use std::{fs, io::{self, Write}};
 
+use arch_db::sstable_manager::ManifestRecord;
 use engine::Engine;
 use parser::parse;
 use command::Command;
@@ -21,9 +22,19 @@ fn main() {
 
     let mut engine= Engine::new();
 
-    let entries= fs::read_dir(".").expect("Failed to read directory to load data!");
-
+    let entries= engine.sstables.manifest.load().expect("Failed to Manifest");
     
+    for entry in entries {
+        match entry {
+            ManifestRecord::AddTable { level, path, ..} => {
+                engine.sstables.load_from_file(&path, level);
+            }
+            ManifestRecord::RemoveTable { path } => {
+                engine.sstables.remove_table(&path);
+            }
+        }
+    }
+
     for entry in entries {
         // println!("{:?}", entry);
         let entry= entry.unwrap();

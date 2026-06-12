@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap}, fs::{self}, sync::atomic::{AtomicU64, Ordering}};
+use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, sync::atomic::{AtomicU64, Ordering}};
 
 use bloom::{ASMS, BloomFilter};
 
@@ -18,6 +18,21 @@ pub enum CompactionStrategy {
     Leveled,
 }
 
+#[derive(Debug, Clone)]
+pub enum ManifestRecord {
+
+    AddTable {
+        level: Level,
+        path: String,
+        min_key: String,
+        max_key: String,
+        file_size: u64,
+    },
+
+    RemoveTable {
+        path: String,
+    },
+}
 
 pub struct SSTableManager {
     pub l0: Vec<SSTable>,
@@ -25,6 +40,7 @@ pub struct SSTableManager {
     pub l2: Vec<SSTable>,
 
     pub strategy: CompactionStrategy,
+    pub manifest: Manifest,
 }
 
 
@@ -42,12 +58,46 @@ pub struct SSTable {
     pub file_size: u64,
 }
 
+pub struct Manifest {
+    path: String,
+}
+
 
 static SSTABLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const L1_COMPACTION_THRESHOLD: usize = 4;
 const SIZE_TIERED_MIN_TABLES: usize = 3;
 const SIZE_TIERED_SIZE_RATIO: f64 = 1.5;
+
+pub fn init_sstable_counter() {
+    let mut max_id = 0u64;
+
+    let entries = fs::read_dir(".")
+        .expect("Failed to read directory");
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if !name.starts_with("sst_") || !name.ends_with(".bin") {
+            continue;
+        }
+
+        let stem = name.trim_end_matches(".bin");
+
+        if let Some(id_str) = stem.rsplit('_').next() {
+            if let Ok(id) = id_str.parse::<u64>() {
+                max_id = max_id.max(id);
+            }
+        }
+    }
+
+    SSTABLE_COUNTER.store(max_id + 1, Ordering::SeqCst);
+}
+
+pub fn next_sstable_id() -> u64 {
+    SSTABLE_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
 
 impl SSTableManager {
     pub fn new() -> Self {
@@ -56,6 +106,7 @@ impl SSTableManager {
             l1: Vec::new(),
             l2: Vec::new(),
             strategy: CompactionStrategy::Leveled,
+            manifest: Manifest::new("MANIFEST"),
         }
     }
 
@@ -85,6 +136,16 @@ impl SSTableManager {
             Level::L1 => self.l1.push(table),
             Level::L2 => self.l2.push(table),
         }
+
+        self.manifest.append(
+            &ManifestRecord::AddTable { 
+                level: table.level.clone(), 
+                path: table.path.clone(), 
+                min_key: table.min_key.clone(), 
+                max_key: table.max_key.clone(), 
+                file_size: table.file_size, 
+            }
+        );
     }
 
     pub fn find_size_tiered_candidates(&self) -> Vec<usize> {
@@ -297,7 +358,10 @@ impl SSTableManager {
 
         for table in self.all_tables() {
             let _= fs::remove_file(&table.path)?;
+
+            self.manifest.append(&ManifestRecord::RemoveTable { path: table.path.clone() })?;
         }
+
         self.l0.clear();
         self.l1.clear();
         self.l2.clear();
@@ -535,37 +599,99 @@ impl SSTableManager {
 
 }
 
-
-pub fn init_sstable_counter() {
-    let mut max_id = 0u64;
-
-    let entries = fs::read_dir(".")
-        .expect("Failed to read directory");
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-
-        if !name.starts_with("sst_") || !name.ends_with(".bin") {
-            continue;
-        }
-
-        let stem = name.trim_end_matches(".bin");
-
-        if let Some(id_str) = stem.rsplit('_').next() {
-            if let Ok(id) = id_str.parse::<u64>() {
-                max_id = max_id.max(id);
+impl ManifestRecord {
+    pub fn serialize(&self) -> String {
+        match self {
+            ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
+                format!(
+                    "ADD|{:?}|{}|{}|{}|{}\n",
+                    level, path, min_key, max_key, file_size,
+                )
+            }
+            ManifestRecord::RemoveTable { path } => {
+                format!("REMOVE|{}\n", path)
             }
         }
     }
 
-    SSTABLE_COUNTER.store(max_id + 1, Ordering::SeqCst);
+    pub fn deserialize(line: &str) -> Option<Self> {
+        let parts: Vec<&str>= line.trim().split('|').collect();
+
+        match parts.first()? {
+            &"ADD" => {
+                if parts.len() != 6 {
+                    return None;
+                }
+
+                let level = match parts[1] {
+                    "L0" => Level::L0,
+                    "L1" => Level::L1,
+                    "L2" => Level::L2,
+
+                    _ => return None,
+                };
+
+                Some(ManifestRecord::AddTable { 
+                    level, 
+                    path: parts[2].to_string(), 
+                    min_key: parts[3].to_string(), 
+                    max_key: parts[4].to_string(), 
+                    file_size: parts[5].parse().ok()?,
+                })
+            }
+            &"REMOVE" => {
+                if parts.len() != 2 {
+                    return None;
+                }
+
+                Some(ManifestRecord::RemoveTable { path: parts[1].to_string() })
+            }
+
+            _ => None,
+        }
+    }
 }
 
-pub fn next_sstable_id() -> u64 {
-    SSTABLE_COUNTER.fetch_add(1, Ordering::SeqCst)
-}
+impl Manifest {
+    pub fn new(path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+        }
+    }
 
+    pub fn append(&self, record: &ManifestRecord) -> Result<()> {
+        
+        let mut file= OpenOptions::new().create(true).append(true).open(&self.path)?;
+
+        file.write_all(record.serialize().as_bytes())?;
+
+        file.sync_all()?;
+
+        Ok(())
+    }
+
+    pub fn load(&self) -> Result<Vec<ManifestRecord>> {
+        if !std::path::Path::new(&self.path).exists() {
+            return Ok(vec![]);
+        }
+
+        let file= File::open(&self.path)?;
+
+        let reader= BufReader::new(file);
+
+        let mut records= vec![];
+
+        for line in reader.lines() {
+            let line= line?;
+
+            if let Some(record)= ManifestRecord::deserialize(&line) {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+}
 
 
 

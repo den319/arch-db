@@ -349,3 +349,143 @@ fn test_size_tiered_candidate_selection() {
     let candidates = manager.find_size_tiered_candidates();
     assert_eq!(candidates.len(), 3);
 }
+
+#[test]
+// Manifest Serialization
+fn test_manifest_record_serialization() {
+
+    let record =
+        ManifestRecord::AddTable {
+
+            level: Level::L1,
+
+            path:
+                "sst_1.bin".into(),
+
+            min_key:
+                "a".into(),
+
+            max_key:
+                "z".into(),
+
+            file_size: 123,
+        };
+
+    let serialized =
+        record.serialize();
+
+    let deserialized =
+        ManifestRecord::deserialize(
+            &serialized
+        ).unwrap();
+
+    match deserialized {
+
+        ManifestRecord::AddTable {
+            level,
+            path,
+            ..
+        } => {
+
+            assert!(
+                matches!(
+                    level,
+                    Level::L1
+                )
+            );
+
+            assert_eq!(
+                path,
+                "sst_1.bin"
+            );
+        }
+
+        _ => panic!("wrong type"),
+    }
+}
+
+
+#[test]
+// Manifest Replay
+fn test_manifest_append_and_load() {
+
+    let path =
+        "test_manifest.log";
+
+    let manifest =
+        Manifest::new(path);
+
+    manifest.append(
+        &ManifestRecord::AddTable {
+
+            level: Level::L0,
+
+            path:
+                "sst.bin".into(),
+
+            min_key:
+                "a".into(),
+
+            max_key:
+                "m".into(),
+
+            file_size: 100,
+        }
+    ).unwrap();
+
+    let records =
+        manifest.load().unwrap();
+
+    assert_eq!(
+        records.len(),
+        1
+    );
+
+    std::fs::remove_file(path)
+        .unwrap();
+}
+
+#[test]
+// RemoveTable Replay
+fn test_manifest_remove_table() {
+
+    let path =
+        "test_manifest_remove.log";
+
+    let manifest =
+        Manifest::new(path);
+
+    manifest.append(
+        &ManifestRecord::RemoveTable {
+
+            path:
+                "sst_old.bin".into(),
+        }
+    ).unwrap();
+
+    let records =
+        manifest.load().unwrap();
+
+    assert_eq!(
+        records.len(),
+        1
+    );
+
+    match &records[0] {
+
+        ManifestRecord::RemoveTable {
+            path
+        } => {
+
+            assert_eq!(
+                path,
+                "sst_old.bin"
+            );
+        }
+
+        _ => panic!("expected REMOVE"),
+    }
+
+    std::fs::remove_file(path)
+        .unwrap();
+}
