@@ -6,3 +6,4 @@ pub mod error;
 pub mod sstable;
 pub mod sstable_manager;
 pub mod helper;
+pub mod cache;

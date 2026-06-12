@@ -2,7 +2,7 @@ use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync:
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
+use crate::{cache::CacheKey, command::Command, error::Result, sstable::{find_block, read_block, read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
 use crate::cache::BlockCache;
 
 
@@ -206,25 +206,32 @@ impl Engine {
         Ok(())
     }
 
-    pub fn get_key(&self, key:&str) -> Option<Value> {
+    pub fn get_key(&mut self, key:&str) -> Option<Value> {
 
         println!("GET KEY: {:?}", key);
         if let Some(val)= self.memtable.get(key) {
             // println!("{:?}", val);
             return Some(val.clone());
         }
-        let sstables = self.sstables.lock().unwrap();
+        let (l0, l1, l2) = {
 
+            let sstables =self.sstables.lock().unwrap();
+            (
+                sstables.l0.clone(),
+                sstables.l1.clone(),
+                sstables.l2.clone(),
+            )
+        };
 
-        if let Some(v) = Self::search_level(&sstables.l0, key) {
+        if let Some(v) = self.search_level(&l0, key) {
             return Some(v);
         }
 
-        if let Some(v) = Self::search_level(&sstables.l1, key) {
+        if let Some(v) = self.search_level(&l1, key) {
             return Some(v);
         }   
 
-        if let Some(v) = Self::search_level(&sstables.l2, key) {
+        if let Some(v) = self.search_level(&l2, key) {
             return Some(v);
         }
 
@@ -240,25 +247,56 @@ impl Engine {
             }
             
             println!("bloom check: {} -> {}", key, table.bloom.contains(&key));
+
             if !table.bloom.contains(&key) {
                 continue;
             }
 
             println!("checking SSTable: {}", table.path);
 
-            match search_sstable(&table.path, &table.index, key) {
-                Ok(Some((_, val))) => {
-                    if let Value::Tombstone = val {
-                        return Some(Value::Tombstone);
+            let block= match find_block(&table.index, key) {
+                Some(block) => block,
+                None => continue,
+            };
+
+            let cache_key= CacheKey {
+                path: table.path.clone(),
+                offset: block.offset,
+            };
+
+            if let Some(records)= self.block_cache.get(&cache_key) {
+                println!("CACHE HIT: {:?}", cache_key);
+
+                for (k,v) in records {
+                    if k == key {
+                        if let Value::Tombstone = v {
+                            return Some(Value::Tombstone);
+                        }
+                        return Some(v);
                     }
-                    println!("Found in SSTable: {:?}", val);
-                    return Some(val);
                 }
-                Ok(None) => {
-                    println!("Not found in this block");
-                }
+
+                continue;
+            }
+
+            println!("CACHE MISS: {:?}", cache_key);
+
+            let records= match read_block(&table.path, block.offset) {
+                Ok(records) => records,
                 Err(e) => {
-                    println!("SSTABLE READ ERROR: {:?}", e);
+                    println!("BLOCK READ ERROR: {:?}", e);
+                    continue;
+                }
+            };
+
+            self.block_cache.insert(cache_key, records.clone());
+
+            for (k,v) in records {
+                if k == key {
+                        if let Value::Tombstone = v {
+                            return Some(Value::Tombstone);
+                        }
+                    return Some(v);
                 }
             }
         }
