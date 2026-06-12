@@ -49,7 +49,7 @@ fn main() {
             engine.sstables.lock().unwrap().load_from_file(&name, level);
         }
     }
-    let mut storage= Storage::new("storage/temp").expect("Failed to intialize storage!");
+    let mut storage= Storage::new("storage/temp", storage::SyncPolicy::Always).expect("Failed to intialize storage!");
 
     let commands= storage.load().expect("Failed to load database!");
 
@@ -91,6 +91,7 @@ fn main() {
                             println!("Flush failed: {}", e);
                         }
                     }
+                    storage.checkpoint().expect("WAL checkpoint failed");
                 }
                 println!("Bye!");
                 break;

@@ -1,9 +1,16 @@
-use std::{fs::{File, OpenOptions, create_dir_all}, io::{Read, Seek, SeekFrom, Write}};
+use std::{fs::{File, OpenOptions, create_dir_all, remove_file}, io::{Read, Seek, SeekFrom, Write}};
 
 use crate::{command::Command, error::Result};
 
 
 const WAL_SEGMENT_SIZE: u64 = 1024 * 1024; // 1 MB
+
+#[derive(Clone, Copy, Debug)]
+pub enum SyncPolicy {
+    Always,
+    Never,
+    EverySeconds(u64),
+}
 
 
 pub struct Storage {
@@ -11,10 +18,13 @@ pub struct Storage {
     pub current_segment: u64,
     current_size: u64,
     base_path: String,
+    sync_policy: SyncPolicy,
+    last_sync: std::time::Instant,
+    last_checkpointed_segment: u64,
 }
 
 impl Storage {
-    pub fn new(base_apth:&str) -> Result<Self> {
+    pub fn new(base_apth:&str, sync_policy: SyncPolicy) -> Result<Self> {
         
         create_dir_all(base_apth)?;
         
@@ -46,7 +56,32 @@ impl Storage {
             current_segment: segment,
             current_size: size,
             base_path: base_apth.to_string(),
+            sync_policy,
+            last_sync: std::time::Instant::now(),
+            last_checkpointed_segment: 0,
         })
+    }
+
+    pub fn checkpoint(&mut self) -> Result<()> {
+        if self.current_segment == 0 {
+            return Ok(());
+        }
+
+        let safe_until= self.current_segment -1;
+
+        for segment in self.last_checkpointed_segment..=safe_until {
+            let path= format!("{}/wal_{}.log", self.base_path, segment);
+
+            if std::path::Path::new(&path).exists() {
+                println!("Removing obsolate WAL segment: {}", path);
+
+                remove_file(path)?;
+            }
+        }
+
+        self.last_checkpointed_segment= self.current_segment;
+
+        Ok(())
     }
 
     pub fn append(&mut self, command:&Command) -> Result<()> {
@@ -65,6 +100,20 @@ impl Storage {
         self.file.write_all(&bytes)?;
         self.file.flush()?;
 
+        match self.sync_policy {
+            SyncPolicy::Always => {
+                self.file.sync_all()?;
+            }
+            SyncPolicy::Never => {}
+            SyncPolicy::EverySeconds(seconds) => {
+                if self.last_sync.elapsed() >= std::time::Duration::from_secs(seconds) {
+                    self.file.sync_all()?;
+
+                    self.last_sync= std::time::Instant::now();
+                }
+            }
+        }
+
         self.current_size += bytes.len() as u64 + 8;
 
         Ok(())
@@ -78,7 +127,12 @@ impl Storage {
         for segment in 0..=self.current_segment {
             let path= generate_wal_segment_name(&self.base_path, segment);
 
-            let mut file= OpenOptions::new().read(true).open(&path)?;
+            // Skip segments that have been removed by checkpoint
+            let mut file = match OpenOptions::new().read(true).open(&path) {
+                Ok(f) => f,
+                Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
             
             let mut bytes= Vec::new();
             
@@ -164,9 +218,3 @@ impl Storage {
 pub fn generate_wal_segment_name(base_path: &str, segment: u64) -> String {
     format!("{}/wal_{}.log", base_path, segment)
 }
-
-
-
-
-
-

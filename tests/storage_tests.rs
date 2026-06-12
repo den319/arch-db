@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use arch_db::storage::{Storage, generate_wal_segment_name};
+use arch_db::storage::{Storage, SyncPolicy, generate_wal_segment_name};
 use arch_db::command::Command;
 use arch_db::helper::unique_dir;
 
@@ -9,7 +9,7 @@ use arch_db::helper::unique_dir;
 fn test_wal_reset() {
     let dir = unique_dir("storage/test");
 
-    let mut storage = Storage::new(&dir).unwrap();
+    let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     storage
         .append(&Command::Set("name".into(), "john".into()))
@@ -33,7 +33,7 @@ fn test_wal_recovery_after_restart() {
     let dir = unique_dir("storage/test");
 
     {
-        let mut storage = Storage::new(&dir).unwrap();
+        let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
         storage
             .append(&Command::Set("user".into(), "john".into()))
@@ -41,7 +41,7 @@ fn test_wal_recovery_after_restart() {
     }
 
     {
-        let mut storage = Storage::new(&dir).unwrap();
+        let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
         let commands = storage.load().unwrap();
 
@@ -63,7 +63,7 @@ fn test_wal_recovery_after_restart() {
 fn test_wal_rotation_after_flush() {
     let dir = unique_dir("storage/test");
 
-    let mut storage = Storage::new(&dir).unwrap();
+    let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     storage
         .append(&Command::Set("a".into(), "1".into()))
@@ -89,7 +89,7 @@ fn test_wal_rotation_after_flush() {
 fn test_wal_segment_rotation() {
     let dir = unique_dir("storage/test");
 
-    let mut storage = Storage::new(&dir).unwrap();
+    let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     let large_value = "x".repeat(1024 * 512);
 
@@ -113,7 +113,7 @@ fn test_recovery_from_multiple_segments() {
     let dir = unique_dir("storage/test");
 
     {
-        let mut storage = Storage::new(&dir).unwrap();
+        let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
         let large = "x".repeat(1024 * 512);
 
@@ -127,7 +127,7 @@ fn test_recovery_from_multiple_segments() {
     }
 
     {
-        let mut storage = Storage::new(&dir).unwrap();
+        let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
         let commands = storage.load().unwrap();
 
@@ -142,7 +142,7 @@ fn test_recovery_from_multiple_segments() {
 fn test_wal_rotation_preserves_data() {
     let dir = unique_dir("storage/test");
 
-    let mut storage = Storage::new(&dir).unwrap();
+    let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     for i in 0..100 {
         storage
@@ -174,7 +174,7 @@ fn test_wal_checksum_valid_recovery() {
 
     {
         let mut storage =
-            Storage::new(&dir)
+            Storage::new(&dir, SyncPolicy::Never)
                 .unwrap();
 
         storage.append(
@@ -187,7 +187,7 @@ fn test_wal_checksum_valid_recovery() {
 
     {
         let mut storage =
-            Storage::new(&dir)
+            Storage::new(&dir, SyncPolicy::Never)
                 .unwrap();
 
         let commands =
@@ -220,7 +220,7 @@ fn test_wal_checksum_detects_corruption() {
 
     {
         let mut storage =
-            Storage::new(&dir)
+            Storage::new(&dir, SyncPolicy::Never)
                 .unwrap();
 
         storage.append(
@@ -253,7 +253,7 @@ fn test_wal_checksum_detects_corruption() {
 
     {
         let mut storage =
-            Storage::new(&dir)
+            Storage::new(&dir, SyncPolicy::Never)
                 .unwrap();
 
         let commands =
@@ -297,7 +297,7 @@ fn test_partial_wal_record_detection() {
 
     {
         let mut storage =
-            Storage::new(&dir)
+            Storage::new(&dir, SyncPolicy::Never)
                 .unwrap();
 
         let commands =
@@ -307,5 +307,224 @@ fn test_partial_wal_record_detection() {
     }
 
     std::fs::remove_dir_all(dir)
+        .unwrap();
+}
+
+#[test]
+// Always Policy Forces Sync
+// Basic durability path still works.
+fn test_sync_policy_always() {
+
+    let dir =
+        unique_dir(
+            "sync_always"
+        );
+
+    let mut storage =
+        Storage::new(
+            &dir,
+            SyncPolicy::Always,
+        ).unwrap();
+
+    storage.append(
+        &Command::Set(
+            "a".into(),
+            "1".into(),
+        )
+    ).unwrap();
+
+    let commands =
+        storage.load().unwrap();
+
+    assert_eq!(commands.len(), 1);
+
+    std::fs::remove_dir_all(dir)
+        .unwrap();
+}
+
+
+#[test]
+// Never Policy Works
+// group commit batching
+fn test_sync_policy_never() {
+
+    let dir =
+        unique_dir(
+            "sync_never"
+        );
+
+    let mut storage =
+        Storage::new(
+            &dir,
+            SyncPolicy::Never,
+        ).unwrap();
+
+    storage.append(
+        &Command::Set(
+            "b".into(),
+            "2".into(),
+        )
+    ).unwrap();
+
+    let commands =
+        storage.load().unwrap();
+
+    assert_eq!(commands.len(), 1);
+
+    std::fs::remove_dir_all(dir)
+        .unwrap();
+}
+
+
+
+#[test]
+// Checkpoint Removes Old WAL Segments
+// Old WAL segments are actually deleted.
+fn test_checkpoint_removes_old_segments() {
+
+    let dir =
+        unique_dir(
+            "checkpoint_cleanup"
+        );
+
+    let mut storage =
+        Storage::new(
+            &dir,
+            SyncPolicy::Always,
+        ).unwrap();
+
+    for i in 0..10 {
+
+        storage.append(
+            &Command::Set(
+                format!("k{}", i),
+                format!("v{}", i),
+            )
+        ).unwrap();
+    }
+
+    storage.rotate_segment()
+        .unwrap();
+
+    let wal0 =
+        format!("{}/wal_0.log", dir);
+
+    assert!(
+        std::path::Path::new(&wal0)
+            .exists()
+    );
+
+    storage.checkpoint()
+        .unwrap();
+
+    assert!(
+        !std::path::Path::new(&wal0)
+            .exists()
+    );
+
+    std::fs::remove_dir_all(dir)
+        .unwrap();
+}
+
+#[test]
+// Active Segment Must Survive
+// catastrophic durability loss
+fn test_checkpoint_keeps_active_segment() {
+
+    let dir =
+        unique_dir(
+            "checkpoint_active"
+        );
+
+    let mut storage =
+        Storage::new(
+            &dir,
+            SyncPolicy::Always,
+        ).unwrap();
+
+    storage.append(
+        &Command::Set(
+            "a".into(),
+            "1".into(),
+        )
+    ).unwrap();
+
+    storage.checkpoint()
+        .unwrap();
+
+    let active =
+        format!("{}/wal_0.log", dir);
+
+    assert!(
+        std::path::Path::new(&active)
+            .exists()
+    );
+
+    std::fs::remove_dir_all(dir)
+        .unwrap();
+}
+
+
+#[test]
+// Recovery Still Works After Checkpoint
+fn test_recovery_after_checkpoint() {
+
+    let dir =
+        unique_dir(
+            "checkpoint_recovery"
+        );
+
+    {
+        let mut storage =
+            Storage::new(
+                &dir,
+                SyncPolicy::Always,
+            ).unwrap();
+
+        storage.append(
+            &Command::Set(
+                "name".into(),
+                "jhon".into(),
+            )
+        ).unwrap();
+
+        storage.rotate_segment()
+            .unwrap();
+
+        storage.checkpoint()
+            .unwrap();
+
+        storage.append(
+            &Command::Set(
+                "city".into(),
+                "chicago".into(),
+            )
+        ).unwrap();
+    }
+
+    {
+        let mut storage =
+            Storage::new(
+                &dir,
+                SyncPolicy::Always,
+            ).unwrap();
+
+        let commands =
+            storage.load().unwrap();
+
+        assert_eq!(commands.len(), 1);
+
+        match &commands[0] {
+            Command::Set(k, v) => {
+
+                assert_eq!(k, "city");
+                assert_eq!(v, "chicago");
+            }
+
+            _ => panic!("expected SET"),
+        }
+    }
+
+    std::fs::remove_dir_all(&dir)
         .unwrap();
 }

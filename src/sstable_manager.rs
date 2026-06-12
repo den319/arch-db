@@ -5,14 +5,6 @@ use bloom::{ASMS, BloomFilter};
 use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, BlockMeta, SSTableIndex, read_sstable, search_sstable, write_sstable}};
 
 
-pub struct SSTableManager {
-    pub l0: Vec<SSTable>,
-    pub l1: Vec<SSTable>,
-    pub l2: Vec<SSTable>,
-
-    pub strategy: CompactionStrategy,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum Level {
     L0,
@@ -25,6 +17,16 @@ pub enum CompactionStrategy {
     SizeTiered,
     Leveled,
 }
+
+
+pub struct SSTableManager {
+    pub l0: Vec<SSTable>,
+    pub l1: Vec<SSTable>,
+    pub l2: Vec<SSTable>,
+
+    pub strategy: CompactionStrategy,
+}
+
 
 // #[derive(Debug)]
 
