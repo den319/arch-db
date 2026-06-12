@@ -257,3 +257,78 @@ pub fn find_block<'a>(index: &'a SSTableIndex, key:&str) -> Option<&'a BlockMeta
 }
 
 
+pub fn read_block(path:&str, offset:u64) -> Result<Vec<(String, Value)>> {
+    let mut file= File::open(path)?;
+
+    file.seek(SeekFrom::Start(offset))?;
+
+    let mut block= vec![0u8;BLOCK_SIZE];
+
+    let bytes_read= file.read(&mut block)?;
+
+    block.truncate(bytes_read);
+
+    let mut result= vec![];
+
+    let mut i=0;
+    while i < block.len() {
+        let record_type= block[i];
+
+        i += 1;
+        if i+8 > block.len() {
+            break;
+        }
+
+        let key_len =u32::from_be_bytes([
+            block[i],
+            block[i+1],
+            block[i+2],
+            block[i+3],
+        ]) as usize;
+
+        i += 4;
+
+        let val_len =u32::from_be_bytes([
+            block[i],
+            block[i+1],
+            block[i+2],
+            block[i+3],
+        ]) as usize;
+
+        i += 4;
+
+        if i + key_len > block.len() {
+            break;
+        }
+
+        let key= String::from_utf8(block[i..i+key_len].to_vec()).unwrap();
+
+        i += key_len;
+
+        let value= match record_type {
+            1 => {
+                if i+val_len > block.len() {
+                    break;
+                }
+
+                let value= String::from_utf8(block[i..i+val_len].to_vec()).unwrap();
+
+                i += val_len;
+
+                Value::Data(value)
+            }
+
+            0 => {
+                i += val_len;
+
+                Value::Tombstone
+            }
+
+            _ => break,
+        };
+
+        result.push((key, value));
+    }
+
+    Ok(result)
+}

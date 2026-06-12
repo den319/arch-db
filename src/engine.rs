@@ -3,6 +3,7 @@ use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync:
 use bloom::{ASMS, BloomFilter};
 
 use crate::{command::Command, error::Result, sstable::{read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
+use crate::cache::BlockCache;
 
 
 #[derive(Clone, Debug)]
@@ -16,6 +17,7 @@ pub struct Engine {
     pub sstables: Arc<Mutex<SSTableManager>>,
     pub memtable_limit: usize,
     pub compaction_tx: Sender<()>,
+    pub block_cache: BlockCache,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +77,7 @@ impl Engine {
             sstables: Arc::new(Mutex::new(SSTableManager::new())),
             memtable_limit: 1000,
             compaction_tx: tx,
+            block_cache: BlockCache::new(64), // 64 blocks
         }
     }
 
@@ -228,7 +231,7 @@ impl Engine {
         Some(Value::Tombstone)
     }
 
-    pub fn search_level(level: &[SSTable], key:&str) -> Option<Value> {
+    pub fn search_level(&mut self, level: &[SSTable], key:&str) -> Option<Value> {
         for table in level.iter().rev() {
             println!("table index: {:?}", table.index);
 

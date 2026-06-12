@@ -6,6 +6,7 @@ mod error;
 mod sstable;
 mod sstable_manager;
 mod helper;
+mod cache;
 
 use std::{fs, io::{self, Write}};
 
