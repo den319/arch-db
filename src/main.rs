@@ -9,34 +9,40 @@ mod helper;
 
 use std::{fs, io::{self, Write}};
 
-use arch_db::sstable_manager::ManifestRecord;
 use engine::Engine;
 use parser::parse;
 use command::Command;
 use storage::Storage;
 
-use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id};
+use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id, ManifestRecord};
 
 fn main() {
     init_sstable_counter();
 
     let mut engine= Engine::new();
 
-    let entries= engine.sstables.manifest.load().expect("Failed to Manifest");
-    
-    for entry in entries {
-        match entry {
-            ManifestRecord::AddTable { level, path, ..} => {
-                engine.sstables.load_from_file(&path, level);
-            }
-            ManifestRecord::RemoveTable { path } => {
-                engine.sstables.remove_table(&path);
+    // Replay manifest to restore known SSTables
+    {
+        let mut sstables = engine.sstables.lock().unwrap();
+        let entries = sstables.manifest.load().expect("Failed to load manifest");
+
+        for entry in entries {
+            match entry {
+                ManifestRecord::AddTable { level, path, .. } => {
+                    sstables.load_from_file(&path, level);
+                }
+                ManifestRecord::RemoveTable { path } => {
+                    // Already handled; skip removed tables
+                    let _ = path;
+                }
             }
         }
     }
 
-    for entry in entries {
-        // println!("{:?}", entry);
+    // Discover any SSTables on disk not yet tracked in the manifest
+    let dir_entries= fs::read_dir(".").expect("Failed to read directory to load data!");
+
+    for entry in dir_entries {
         let entry= entry.unwrap();
 
         let name= entry.file_name();

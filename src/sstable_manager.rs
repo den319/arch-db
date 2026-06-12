@@ -106,7 +106,7 @@ impl SSTableManager {
             l1: Vec::new(),
             l2: Vec::new(),
             strategy: CompactionStrategy::Leveled,
-            manifest: Manifest::new("MANIFEST"),
+            manifest: Manifest::new("MANIFEST.log"),
         }
     }
 
@@ -131,19 +131,26 @@ impl SSTableManager {
     }
 
     pub fn add_table(&mut self, table: SSTable) {
-        match table.level {
+        // Extract data before moving `table` into the Vec
+        let level = table.level;
+        let path = table.path.clone();
+        let min_key = table.min_key.clone();
+        let max_key = table.max_key.clone();
+        let file_size = table.file_size;
+
+        match level {
             Level::L0 => self.l0.push(table),
             Level::L1 => self.l1.push(table),
             Level::L2 => self.l2.push(table),
         }
 
-        self.manifest.append(
+        let _= self.manifest.append(
             &ManifestRecord::AddTable { 
-                level: table.level.clone(), 
-                path: table.path.clone(), 
-                min_key: table.min_key.clone(), 
-                max_key: table.max_key.clone(), 
-                file_size: table.file_size, 
+                level, 
+                path, 
+                min_key, 
+                max_key, 
+                file_size, 
             }
         );
     }
@@ -228,8 +235,18 @@ impl SSTableManager {
     }
 
     pub fn load_from_file(&mut self, path: &str, level: Level) {
-        // println!("{}", path);
-        let data= read_sstable(path).expect("Failed to read sstable!");
+        // Skip if the file no longer exists (e.g. cleaned up by a previous compaction)
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+
+        let data= match read_sstable(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Warning: failed to read SSTable {}: {}", path, e);
+                return;
+            }
+        };
 
         let min_key= data.first().map(|(k, _)|k.clone()).unwrap_or_default();
 
@@ -511,9 +528,11 @@ impl SSTableManager {
         for idx in overlapping_indices.iter().rev() {
             let table= self.l2.remove(*idx);
 
+            self.manifest.append(&ManifestRecord::RemoveTable { path: table.path.clone() })?;
             fs::remove_file(&table.path)?;
         }
 
+        self.manifest.append(&ManifestRecord::RemoveTable { path: self.l1[0].path.clone() })?;
         fs::remove_file(&self.l1[0].path)?;
 
         self.l1.remove(0);
@@ -588,6 +607,7 @@ impl SSTableManager {
         for idx in sorted_candidates {
             let old = self.l0.remove(idx);
 
+            self.manifest.append(&ManifestRecord::RemoveTable { path: old.path.clone() })?;
             fs::remove_file(old.path)?;
         }
 

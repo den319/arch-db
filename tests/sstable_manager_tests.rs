@@ -5,7 +5,7 @@ use bloom::{ASMS, BloomFilter};
 
 use arch_db::engine::Value;
 use arch_db::sstable::{SSTableIndex, write_sstable, search_sstable};
-use arch_db::sstable_manager::{SSTableManager, SSTable, Level};
+use arch_db::sstable_manager::{SSTableManager, SSTable, Level, Manifest, ManifestRecord};
 
 fn unique_file(prefix: &str, ext: &str) -> String {
     let id = std::time::SystemTime::now()
