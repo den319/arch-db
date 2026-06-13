@@ -2,13 +2,13 @@ use std::{collections::BTreeMap, fs::File, io::{Read, Seek, SeekFrom, Write}};
 
 use crate::{engine::Value, error::Result, sstable_manager::SSTable};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockMeta {
     pub start_key: String,
     pub offset: u64,
     pub record_offset: BTreeMap<String, u64>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SSTableIndex {
     pub offsets: BTreeMap<String, u64>,
     pub blocks: Vec<BlockMeta>,

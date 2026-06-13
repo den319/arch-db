@@ -123,7 +123,6 @@ impl Engine {
                 
             }
             Command::Compact => {
-                // Flush memtable to SSTable first, then compact
                 if self.memtable_size() > 0 {
                     let sstable_id = next_sstable_id();
                     let file = format!("sst_l0_{}.bin", sstable_id);
@@ -163,17 +162,13 @@ impl Engine {
         let size = data.len().max(8) as u32;
         let mut bloom = BloomFilter::with_rate(0.01, size);
         
-
         for (key, _) in &data {
             bloom.insert(key);
         }
-        // println!("{:?}", path);
         let index=  write_sstable(path, &data)?;
 
         let min_key= data.first().map(|(k, _)|k.clone()).unwrap();
-
         let max_key= data.last().map(|(k, _)|k.clone()).unwrap();
-
         let file_size= fs::metadata(&path)?.len();
 
         {
@@ -192,111 +187,106 @@ impl Engine {
         }
 
         let mut sstables = self.sstables.lock().unwrap();
-
         if sstables.l0.len() >= 4 {
             sstables.size_tiered_compact_l0()?;
         }
-
-        // sstables.maybe_compact()?;
         
         self.memtable.clear();
-
         let _= self.compaction_tx.send(());
 
         Ok(())
     }
 
+    /// Lock briefly to check bloom filters (fast, memory-only) and
+    /// collect candidates. Then release the lock before any disk I/O,
+    /// so the background compaction worker is not blocked.
     pub fn get_key(&mut self, key:&str) -> Option<Value> {
 
         println!("GET KEY: {:?}", key);
         if let Some(val)= self.memtable.get(key) {
-            // println!("{:?}", val);
             return Some(val.clone());
         }
-        let (l0, l1, l2) = {
 
-            let sstables =self.sstables.lock().unwrap();
-            (
-                sstables.l0.clone(),
-                sstables.l1.clone(),
-                sstables.l2.clone(),
-            )
+        // Lock briefly → check bloom (memory only) → collect candidates
+        let candidates = {
+            let sstables = self.sstables.lock().unwrap();
+
+            let mut v: Vec<(String, crate::sstable::SSTableIndex)> = Vec::new();
+            for t in sstables.l0.iter().rev() {
+                if !t.contains_key_range(key) { continue; }
+                if t.bloom.contains(&key) {
+                    v.push((t.path.clone(), t.index.clone()));
+                }
+            }
+            for t in sstables.l1.iter().rev() {
+                if !t.contains_key_range(key) { continue; }
+                if t.bloom.contains(&key) {
+                    v.push((t.path.clone(), t.index.clone()));
+                }
+            }
+            for t in sstables.l2.iter().rev() {
+                if !t.contains_key_range(key) { continue; }
+                if t.bloom.contains(&key) {
+                    v.push((t.path.clone(), t.index.clone()));
+                }
+            }
+            v
         };
+        // Lock released — background compaction can proceed
 
-        if let Some(v) = self.search_level(&l0, key) {
-            return Some(v);
-        }
-
-        if let Some(v) = self.search_level(&l1, key) {
-            return Some(v);
-        }   
-
-        if let Some(v) = self.search_level(&l2, key) {
-            return Some(v);
+        for (path, index) in &candidates {
+            if let Some(v) = Self::search_one(path, index, key, &mut self.block_cache) {
+                return Some(v);
+            }
         }
 
         Some(Value::Tombstone)
     }
 
-    pub fn search_level(&mut self, level: &[SSTable], key:&str) -> Option<Value> {
-        for table in level.iter().rev() {
-            println!("table index: {:?}", table.index);
+    pub fn search_one(path: &str, index: &crate::sstable::SSTableIndex, key:&str, cache: &mut BlockCache) -> Option<Value> {
+        println!("checking SSTable: {}", path);
 
-            if !table.contains_key_range(key) {
-                continue;
-            }
-            
-            println!("bloom check: {} -> {}", key, table.bloom.contains(&key));
+        let block = match find_block(index, key) {
+            Some(b) => b,
+            None => return None,
+        };
 
-            if !table.bloom.contains(&key) {
-                continue;
-            }
+        let cache_key = CacheKey {
+            path: path.to_string(),
+            offset: block.offset,
+        };
 
-            println!("checking SSTable: {}", table.path);
-
-            let block= match find_block(&table.index, key) {
-                Some(block) => block,
-                None => continue,
-            };
-
-            let cache_key= CacheKey {
-                path: table.path.clone(),
-                offset: block.offset,
-            };
-
-            if let Some(records)= self.block_cache.get(&cache_key) {
-                println!("CACHE HIT: {:?}", cache_key);
-
-                for (k,v) in records {
-                    if k == key {
-                        if let Value::Tombstone = v {
-                            return Some(Value::Tombstone);
-                        }
-                        return Some(v);
+        // Cache hit — no disk I/O
+        if let Some(records) = cache.get(&cache_key) {
+            println!("CACHE HIT: {:?}", cache_key);
+            for (k, v) in &records {
+                if k == key {
+                    match v {
+                        Value::Tombstone => return Some(Value::Tombstone),
+                        _ => return Some(v.clone()),
                     }
                 }
-
-                continue;
             }
+            return None;
+        }
 
-            println!("CACHE MISS: {:?}", cache_key);
+        // Cache miss — read from disk (lock is NOT held at this point)
+        println!("CACHE MISS: {:?}", cache_key);
+        let records = match read_block(path, block.offset) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("BLOCK READ ERROR: {:?}", e);
+                return None;
+            }
+        };
 
-            let records= match read_block(&table.path, block.offset) {
-                Ok(records) => records,
-                Err(e) => {
-                    println!("BLOCK READ ERROR: {:?}", e);
-                    continue;
-                }
-            };
+        cache.insert(cache_key, records.clone());
 
-            self.block_cache.insert(cache_key, records.clone());
-
-            for (k,v) in records {
-                if k == key {
-                        if let Value::Tombstone = v {
-                            return Some(Value::Tombstone);
-                        }
-                    return Some(v);
+        for (k, v) in &records {
+            if k == key {
+                match v {
+                    Value::Tombstone => return Some(Value::Tombstone),
+                    _ => return Some(v.clone()),
                 }
             }
         }
@@ -306,13 +296,10 @@ impl Engine {
     }
 
     pub fn maybe_flush(&mut self) -> Result<()> {
-
         if self.memtable.len() >= self.memtable_limit {
             let path = format!("sst_l0_{}.bin",next_sstable_id());
-    
             self.flush_to_sstable(&path)?;
         }
-
         Ok(())
     }
 
@@ -322,78 +309,49 @@ impl Engine {
 
     pub fn scan(&self, start:&str, end:&str) -> Vec<(String, Value)> {
         let mut sources:Vec<Vec<(String, Value)>>= Vec::new();
-
-        // memtable (already sorted)
         let mem_data:Vec<(String, Value)>= self.memtable.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
-
-        // println!("data: {:?}", mem_data);
-
         sources.push(mem_data);
 
         let sstables = self.sstables.lock().unwrap();
-        // SSTable
         for table in &sstables.l0 {
-            // println!("{:?}", table.path);
             let data= read_sstable(&table.path).expect("Scan of L0 Failed!");
             sources.push(data);
         }
-
         for table in &sstables.l1 {
             let data = read_sstable(&table.path).expect("Scan of L1 failed");
             sources.push(data);
         }
-
         for table in &sstables.l2 {
             let data = read_sstable(&table.path).expect("Scan of L2 failed");
             sources.push(data);
         }
 
         let mut heap= BinaryHeap::new();
-
         let mut positions= vec![0usize; sources.len()];
 
-        // println!("{:?}", sources);
-
         for (src_idx, source) in sources.iter().enumerate() {
-            // println!("{:?} source:{:?} data: {:?}", src_idx, source, source.get(1));
-
             if let Some((k,v))= source.first() {
-                heap.push(HeapItem {
-                    key: k.clone(),
-                    val: v.clone(),
-                    source_idx: src_idx,
-                });
+                heap.push(HeapItem { key: k.clone(), val: v.clone(), source_idx: src_idx });
             }
         }
 
         let mut merged: HashMap<String, Value>= HashMap::new();
 
-        // println!("{:?}", heap);
-
         while let Some(item)= heap.pop() {
-            // println!("{:?}", item);
             if item.key.as_str() >= start && item.key.as_str() < end {
                 merged.entry(item.key.clone()).or_insert(item.val.clone());
             }
             let src= item.source_idx;
-
             positions[src] += 1;
-
-            // println!("sources: {:?} positions: {:?}", sources, positions);
-            // println!("{:?}", sources[src].get(positions[src]));
-
             if let Some((k,v)) = sources[src].get(positions[src]) {
                 heap.push(HeapItem { key: k.clone(), val: v.clone(), source_idx: src });
             }
         }
 
-        let mut result:Vec<_>= merged.into_iter().filter(|(_,v)| {
-            matches!(v, Value::Data(_))
-        }).collect();
-
+        let mut result:Vec<_>= merged.into_iter().filter(|(_,v)| matches!(v, Value::Data(_))).collect();
         result.sort_by(|a,b| a.0.cmp(&b.0));
-
         result
     }
     
 }
+
