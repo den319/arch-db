@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, fs::File, io::{Read, Seek, SeekFrom, Write}};
 
+use crc32fast::hash;
+
 use crate::{engine::Value, error::Result, sstable_manager::SSTable};
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,8 @@ pub fn write_sstable(
     path:&str, 
     data: &[(String, Value)]
 ) -> Result<SSTableIndex> {
+    const CHECKSUM_SIZE: u64 = 4;
+
     let mut offsets= BTreeMap::new();
     let mut file_offset= 0u64;
     
@@ -70,9 +74,12 @@ pub fn write_sstable(
         record.extend(value_bytes);
 
         if block_size + record.len() > BLOCK_SIZE {
+            let checksum= hash(&single_block);
+
+            file.write_all(&checksum.to_be_bytes())?;
             file.write_all(&single_block)?;
 
-            file_offset += single_block.len() as u64;
+            file_offset += CHECKSUM_SIZE + single_block.len() as u64;
 
             if let Some(last_block) = blocks.last_mut() {
                 last_block.record_offset = current_block_offsets.clone();
@@ -90,7 +97,7 @@ pub fn write_sstable(
             is_new_block= false;
         }
 
-        let record_offset= file_offset + single_block.len() as u64;
+        let record_offset= CHECKSUM_SIZE + file_offset + single_block.len() as u64;
 
         current_block_offsets.insert(key.clone(), record_offset);
 
@@ -105,6 +112,10 @@ pub fn write_sstable(
         if let Some(last_block)= blocks.last_mut() {
             last_block.record_offset= current_block_offsets.clone();
         }
+
+        let checksum= hash(&single_block);
+
+        file.write_all(&checksum.to_be_bytes())?;
         file.write_all(&single_block)?;
     }
 
@@ -118,6 +129,12 @@ pub fn read_sstable(path:&str) -> Result<Vec<(String, Value)>> {
 
     let mut bytes= Vec::new();
 
+    let mut checksum_buf= [0u8; 4];
+
+    file.read_exact(&mut checksum_buf)?;
+
+    let stored_checksum= u32::from_be_bytes(checksum_buf);
+
     loop {
         let mut block= vec![0u8; BLOCK_SIZE];
 
@@ -128,6 +145,16 @@ pub fn read_sstable(path:&str) -> Result<Vec<(String, Value)>> {
         }
 
         block.truncate(bytes_read);
+
+        let computed_checksum =
+            hash(&block);
+
+        if computed_checksum != stored_checksum {
+            println!("CORRUPTED SSTABLE BLOCK DETECTED");
+
+            return Ok(vec![]);
+        }        
+        
         bytes.extend(block);
     }
 

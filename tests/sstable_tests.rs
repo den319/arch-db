@@ -1,7 +1,7 @@
 use std::fs;
 
 use arch_db::engine::Value;
-use arch_db::sstable::{write_sstable, search_sstable, find_block};
+use arch_db::sstable::{find_block, read_block, search_sstable, write_sstable};
 
 fn sample_data() -> Vec<(String, Value)> {
     vec![
@@ -115,4 +115,54 @@ fn test_overlap_detection() {
     assert!(table.overlaps("e", "g"));
     assert!(!table.overlaps("g", "z"));
     assert!(!table.overlaps("x", "z"));
+}
+
+
+#[test]
+// disk corruption
+// bad sectors
+// partial writes
+// random byte corruption
+fn test_detect_corrupted_sstable_block() {
+
+    use std::io::{Seek, SeekFrom, Write};
+
+    let path =
+        "test_corrupt_block.bin";
+
+    let data = sample_data();
+
+    write_sstable(
+        path,
+        &data
+    ).unwrap();
+
+    // Corrupt file bytes
+
+    {
+        let mut file =
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap();
+
+        file.seek(
+            SeekFrom::Start(10)
+        ).unwrap();
+
+        file.write_all(
+            b"XXXX"
+        ).unwrap();
+    }
+
+    let result =
+        read_block(path, 0)
+            .unwrap();
+
+    assert!(
+        result.is_empty()
+    );
+
+    std::fs::remove_file(path)
+        .unwrap();
 }
