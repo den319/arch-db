@@ -1,7 +1,7 @@
 use std::fs;
 
 use arch_db::engine::Value;
-use arch_db::sstable::{find_block, read_block, search_sstable, write_sstable};
+use arch_db::sstable::{find_block, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
 
 fn sample_data() -> Vec<(String, Value)> {
     vec![
@@ -166,3 +166,55 @@ fn test_detect_corrupted_sstable_block() {
     std::fs::remove_file(path)
         .unwrap();
 }
+
+
+
+#[test]
+fn test_footer_roundtrip() {
+    let path = "test_footer_roundtrip.bin";
+
+    let data = vec![
+        ("a".to_string(), Value::Data("1".into())),
+        ("b".to_string(), Value::Data("2".into())),
+    ];
+
+    write_sstable(path, &data).unwrap();
+
+    let footer =
+        read_footer(path).unwrap();
+
+    assert!(footer.index_offset > 0);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_load_index_from_footer() {
+    let path =
+        "test_load_index_from_footer.bin";
+
+    let data = vec![
+        ("a".to_string(), Value::Data("1".into())),
+        ("b".to_string(), Value::Data("2".into())),
+    ];
+
+    let original_index =
+        write_sstable(path, &data).unwrap();
+
+    let loaded_index =
+        load_index_from_footer(path)
+            .unwrap();
+
+    assert_eq!(
+        original_index.blocks.len(),
+        loaded_index.blocks.len()
+    );
+
+    assert_eq!(
+        original_index.blocks[0].start_key,
+        loaded_index.blocks[0].start_key
+    );
+
+    std::fs::remove_file(path).unwrap();
+}
+
