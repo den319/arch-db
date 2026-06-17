@@ -4,6 +4,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 
+use bloom::ASMS;
 use crc32fast::hash;
 
 use crate::{engine::Value, error::Result, sstable_manager::SSTable};
@@ -21,10 +22,21 @@ pub struct SSTableIndex {
 }
 
 #[derive(Debug, Clone)]
-pub struct SSTableFooter {
+pub struct FooterMetadata {
     pub index_offset: u64,
+    pub index_size: u64,
+
     pub bloom_offset: u64,
+    pub bloom_size: u64,
 }
+
+#[derive(Debug, Clone)]
+pub struct LoadedFooter {
+    pub metadata: FooterMetadata,
+    pub index: SSTableIndex,
+    pub bloom: bloom::BloomFilter,
+}
+
 pub const BLOCK_SIZE: usize = 40;
 
 impl SSTable {
@@ -36,6 +48,130 @@ impl SSTable {
         key >= self.min_key.as_str() && key <= self.max_key.as_str()
     }
 }
+
+impl FooterMetadata {
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        bytes.extend(self.index_offset.to_le_bytes());
+        bytes.extend(self.index_size.to_le_bytes());
+
+        bytes.extend(self.bloom_offset.to_le_bytes());
+        bytes.extend(self.bloom_size.to_le_bytes());
+
+        bytes
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Self {
+        let index_offset =
+            u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+
+        let index_size =
+            u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+
+        let bloom_offset =
+            u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+
+        let bloom_size =
+            u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+
+        Self {
+            index_offset,
+            index_size,
+            bloom_offset,
+            bloom_size,
+        }
+    }
+}
+
+impl SSTableIndex {
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        let count = self.offsets.len() as u64;
+        bytes.extend(count.to_le_bytes());
+
+        for (key, offset) in &self.offsets {
+            let key_bytes = key.as_bytes();
+
+            let key_len = key_bytes.len() as u64;
+
+            bytes.extend(key_len.to_le_bytes());
+            bytes.extend(key_bytes);
+
+            bytes.extend(offset.to_le_bytes());
+        }
+
+        bytes
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Self {
+        use std::collections::BTreeMap;
+
+        let mut pos = 0;
+
+        let count =
+            u64::from_le_bytes(
+                bytes[pos..pos + 8]
+                    .try_into()
+                    .unwrap()
+            );
+
+        pos += 8;
+
+        let mut offsets = BTreeMap::new();
+
+        for _ in 0..count {
+            let key_len =
+                u64::from_le_bytes(
+                    bytes[pos..pos + 8]
+                        .try_into()
+                        .unwrap()
+                ) as usize;
+
+            pos += 8;
+
+            let key =
+                String::from_utf8(
+                    bytes[pos..pos + key_len]
+                        .to_vec()
+                ).unwrap();
+
+            pos += key_len;
+
+            let offset =
+                u64::from_le_bytes(
+                    bytes[pos..pos + 8]
+                        .try_into()
+                        .unwrap()
+                );
+
+            pos += 8;
+
+            offsets.insert(key, offset);
+        }
+
+        Self {
+            offsets,
+            blocks: vec![],
+        }
+    }
+}
+
+pub fn serialize_bloom(
+    bloom: &bloom::BloomFilter,
+) -> Vec<u8> {
+    bincode::serialize(bloom)
+        .expect("failed to serialize bloom")
+}
+
+pub fn deserialize_bloom(
+    bytes: &[u8],
+) -> bloom::BloomFilter {
+    bincode::deserialize(bytes)
+        .expect("failed to deserialize bloom")
+}
+
 
 pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableIndex> {
     const HEADER_SIZE: u64 = 8; // 4 bytes data_len + 4 bytes CRC32
@@ -132,37 +268,74 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
 
     blocks.sort_by(|a, b| a.start_key.cmp(&b.start_key));
 
-    let index_offset= file.seek(SeekFrom::Current(0))?;
-
-    let temp_index= SSTableIndex {
+    let index = SSTableIndex {
         offsets: offsets.clone(),
         blocks: blocks.clone(),
     };
 
-    let serialized_index= serialize_index(&temp_index);
+    let serialized_index =
+        serialize_index(&index);
 
-    file.write_all(&(serialized_index.len() as u32).to_be_bytes())?;
+    let index_offset =
+        file.seek(SeekFrom::Current(0))?;
 
     file.write_all(&serialized_index)?;
 
-    let footer= SSTableFooter {
+    let mut bloom =
+        bloom::BloomFilter::with_rate(
+            0.01,
+            data.len().max(1),
+        );
+
+    for (key, _) in data {
+        bloom.insert(key);
+    }
+
+    let serialized_bloom =
+        serialize_bloom(&bloom);
+
+    let bloom_offset =
+        file.seek(SeekFrom::Current(0))?;
+
+    file.write_all(&serialized_bloom)?;
+
+    let footer = FooterMetadata {
         index_offset,
-        bloom_offset: 0,
+        index_size: serialized_index.len() as u64,
+
+        bloom_offset,
+        bloom_size: serialized_bloom.len() as u64,
     };
 
-    file.write_all(&footer.index_offset.to_be_bytes())?;
+    let footer_bytes =
+        footer.serialize();
 
-    file.write_all(&footer.bloom_offset.to_be_bytes())?;
-    
-    Ok(SSTableIndex { offsets, blocks })
+    file.write_all(&footer_bytes)?;
+
+    file.write_all(
+        &(footer_bytes.len() as u64)
+            .to_le_bytes()
+    )?;
+
+    Ok(index)
 }
 
 pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
     let mut file = File::open(path)?;
 
+    // Read the footer to find where data blocks end (at index_offset)
+    let footer = read_footer(path)?;
+    let data_end = footer.index_offset;
+
     let mut bytes = Vec::new();
 
     loop {
+        // Stop if we've reached the index section
+        let pos = file.seek(SeekFrom::Current(0))?;
+        if pos >= data_end {
+            break;
+        }
+
         // Each block is prefixed with: 4-byte data_len + 4-byte CRC32
         let mut len_buf = [0u8; 4];
 
@@ -459,43 +632,106 @@ pub fn deserialize_index(bytes: &[u8]) -> SSTableIndex {
     }
 }
 
-pub fn read_footer(path: &str) -> Result<SSTableFooter> {
-    let mut file= File::open(path)?;
+pub fn read_footer(
+    path: &str,
+) -> Result<FooterMetadata> {
+    let mut file =
+        File::open(path)?;
 
-    let file_size= file.metadata()?.len();
+    let file_size =
+        file.metadata()?.len();
 
-    // footer is last 16 bytes
-    file.seek(SeekFrom::Start(file_size - 16))?;
+    file.seek(
+        SeekFrom::Start(file_size - 8)
+    )?;
 
-    let mut buf= [0u8; 8];
+    let mut size_buf = [0u8; 8];
 
-    file.read_exact(&mut buf)?;
+    file.read_exact(&mut size_buf)?;
 
-    let index_offset= u64::from_be_bytes(buf);
+    let footer_size =
+        u64::from_le_bytes(size_buf);
 
-    file.read_exact(&mut buf)?;
+    file.seek(
+        SeekFrom::Start(
+            file_size - 8 - footer_size
+        )
+    )?;
 
-    let bloom_offset= u64::from_be_bytes(buf);
+    let mut footer_bytes =
+        vec![0u8; footer_size as usize];
 
-    Ok(SSTableFooter { index_offset, bloom_offset })
+    file.read_exact(
+        &mut footer_bytes
+    )?;
+
+    Ok(
+        FooterMetadata::deserialize(
+            &footer_bytes
+        )
+    )
 }
 
-pub fn load_index_from_footer(path: &str) -> Result<SSTableIndex> {
-    let footer= read_footer(path)?;
+pub fn load_index_from_footer(
+    path: &str,
+) -> Result<SSTableIndex> {
 
-    let mut file= File::open(path)?;
+    let footer =
+        read_footer(path)?;
 
-    file.seek(SeekFrom::Start(footer.index_offset))?;
+    let mut file =
+        File::open(path)?;
 
-    let mut len_buf= [0u8; 4];
+    file.seek(
+        SeekFrom::Start(
+            footer.index_offset
+        )
+    )?;
 
-    file.read_exact(&mut len_buf)?;
+    let mut bytes =
+        vec![0u8;
+            footer.index_size as usize
+        ];
 
-    let len= u32::from_be_bytes(len_buf) as usize;
+    file.read_exact(
+        &mut bytes
+    )?;
 
-    let mut bytes= vec![0u8; len];
+    Ok(
+        deserialize_index(
+            &bytes
+        )
+    )
+}
 
-    file.read_exact(&mut bytes)?;
+pub fn load_bloom_from_footer(
+    path: &str,
+) -> Result<bloom::BloomFilter> {
 
-    Ok(deserialize_index(&bytes))
+    let footer =
+        read_footer(path)?;
+
+    let mut file =
+        File::open(path)?;
+
+    file.seek(
+        SeekFrom::Start(
+            footer.bloom_offset
+        )
+    )?;
+
+    let mut bytes =
+        vec![0u8;
+            footer.bloom_size as usize
+        ];
+
+    file.read_exact(
+        &mut bytes
+    )?;
+
+    Ok(
+        deserialize_bloom(
+            &bytes
+        )
+    )
 }

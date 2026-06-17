@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 bloom = "0.3"
 crc32fast = "1.4"
+bincode = "1.3"

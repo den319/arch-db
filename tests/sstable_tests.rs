@@ -218,3 +218,85 @@ fn test_load_index_from_footer() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn test_footer_metadata_roundtrip() {
+
+    let data = vec![
+        (
+            "apple".to_string(),
+            Value::Data("1".to_string())
+        ),
+        (
+            "banana".to_string(),
+            Value::Data("2".to_string())
+        ),
+    ];
+
+    let file =
+        unique_file(
+            "footer_roundtrip",
+            "bin"
+        );
+
+    write_sstable(
+        &file,
+        &data
+    ).unwrap();
+
+    let footer =
+        read_footer(&file)
+            .unwrap();
+
+    assert!(
+        footer.index_size > 0
+    );
+
+    assert!(
+        footer.bloom_size > 0
+    );
+
+    std::fs::remove_file(file)
+        .unwrap();
+}
+
+#[test]
+fn test_load_bloom_from_footer() {
+
+    let data = vec![
+        (
+            "apple".to_string(),
+            Value::Data("1".to_string())
+        ),
+        (
+            "banana".to_string(),
+            Value::Data("2".to_string())
+        ),
+    ];
+
+    let file =
+        unique_file(
+            "footer_bloom",
+            "bin"
+        );
+
+    write_sstable(
+        &file,
+        &data
+    ).unwrap();
+
+    let bloom =
+        load_bloom_from_footer(
+            &file
+        ).unwrap();
+
+    assert!(
+        bloom.contains("apple")
+    );
+
+    assert!(
+        bloom.contains("banana")
+    );
+
+    std::fs::remove_file(file)
+        .unwrap();
+}

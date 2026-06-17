@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{
 
 use bloom::{ASMS, BloomFilter};
 
-use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, BlockMeta, SSTableIndex, read_sstable, search_sstable, write_sstable}};
+use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, BlockMeta, SSTableIndex, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -240,7 +240,16 @@ impl SSTableManager {
             return;
         }
 
-        let data= match read_sstable(path) {
+        let index = match load_index_from_footer(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Warning: failed to load footer {}: {}", path, e);
+                return;
+            }
+        };
+
+        // Read the full SSTable data to extract min/max keys and build bloom filter
+        let data = match read_sstable(path) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Warning: failed to read SSTable {}: {}", path, e);
@@ -248,84 +257,23 @@ impl SSTableManager {
             }
         };
 
-        let min_key= data.first().map(|(k, _)|k.clone()).unwrap_or_default();
-
-        let max_key= data.last().map(|(k, _)|k.clone()).unwrap_or_default();
-
-
-        let mut offsets= BTreeMap::new();
-        let mut blocks= Vec::new();
-
-        let mut offset= 0u64;
-        let mut current_block_size= 0usize;
+        let min_key = data.first().map(|(k, _)| k.clone()).unwrap_or_default();
+        let max_key = data.last().map(|(k, _)| k.clone()).unwrap_or_default();
 
         let size = data.len().max(8) as u32;
-        let mut bloom= BloomFilter::with_rate(0.01, size);
-        
+        let mut bloom = BloomFilter::with_rate(0.01, size);
+
+        for (k, _) in &data {
+            bloom.insert(k);
+        }
+
         let file_size = fs::metadata(path)
             .expect("failed to read metadata")
             .len();
 
-        if data.is_empty() {
-            self.add_table(SSTable {
-                path: path.to_string(),
-                index: SSTableIndex { offsets, blocks },
-                bloom,
-                level: Level::L0,
-                min_key,
-                max_key,
-                file_size,
-            });
-            return;
-        }
-
-        for (key, val) in &data {
-
-            let record_size= 1 + 4 + 4 + key.len() + match val {
-                Value::Data(v) => v.len(),
-                Value::Tombstone => 0,
-            };
-            
-            bloom.insert(&key);
-
-            if current_block_size == 0 {
-                blocks.push(BlockMeta {
-                    start_key: key.clone(),
-                    offset,
-                    record_offset: BTreeMap::new(),
-                });
-            }
-
-            if let Some(last_block) = blocks.last_mut() {
-                last_block.record_offset.insert(
-                    key.clone(),
-                    offset
-                );
-            }
-
-            offsets.insert(key.clone(), offset);
-
-            current_block_size += record_size;
-
-            if current_block_size >= BLOCK_SIZE {
-                current_block_size = 0;
-            }
-
-            // println!("{}", offset);
-            offset += match val {
-                Value::Data(v) => {
-                    1 + 8 + key.len() as u64 + v.len() as u64
-                }
-                Value::Tombstone => {
-                    1 + 8 + key.len() as u64
-                }
-            }
-            
-        }
-
-        let table= SSTable {
+        let table = SSTable {
             path: path.to_string(),
-            index: SSTableIndex { offsets, blocks },
+            index,
             bloom,
             level,
             min_key,
