@@ -59,6 +59,7 @@ pub struct SSTable {
 pub struct Manifest {
     log_path: String,
     checkpoint_path: String,
+    operations: usize,
 }
 
 
@@ -67,6 +68,7 @@ static SSTABLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const L1_COMPACTION_THRESHOLD: usize = 4;
 const SIZE_TIERED_MIN_TABLES: usize = 3;
 const SIZE_TIERED_SIZE_RATIO: f64 = 1.5;
+const MANIFEST_CHECKPOINT_INTERVAL: usize = 10;
 
 pub fn init_sstable_counter() {
     let mut max_id = 0u64;
@@ -130,24 +132,25 @@ impl SSTableManager {
     }
 
     pub fn load_table_metadata(
+        &mut self, 
         path: &str,
         level: Level,
         min_key: String,
         max_key: String,
         file_size: u64, 
-    ) -> Option<SSTable> {
+    ) {
 
         // Skip if the file no longer exists (e.g. cleaned up by a previous compaction or test)
         if !std::path::Path::new(path).exists() {
             eprintln!("Warning: SSTable not found, skipping: {}", path);
-            return None;
+            return;
         }
 
         let index = match load_index_from_footer(path) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Warning: failed to load footer {}: {}", path, e);
-                return None;
+                return;
             }
         };
 
@@ -155,11 +158,11 @@ impl SSTableManager {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Warning: failed to load bloom footer {}: {}", path, e);
-                return None;
+                return;
             }
         };
 
-        Some(SSTable {
+        let table= SSTable {
             path: path.to_string(),
             index,
             bloom,
@@ -167,7 +170,13 @@ impl SSTableManager {
             min_key,
             max_key,
             file_size,
-        })
+        };
+
+        match level {
+            Level::L0 => self.l0.push(table),
+            Level::L1 => self.l1.push(table),
+            Level::L2 => self.l2.push(table),
+        }
     }
 
     pub fn add_table(&mut self, table: SSTable) {
@@ -278,42 +287,6 @@ impl SSTableManager {
         Ok(None)
     }
 
-    pub fn load_from_file(&mut self, path: &str, level: Level) {
-        // Skip if the file no longer exists (e.g. cleaned up by a previous compaction)
-        if !std::path::Path::new(path).exists() {
-            return;
-        }
-
-        // Read the full SSTable data to extract min/max keys
-        let data = match read_sstable(path) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Warning: failed to read SSTable at {}: {}", path, e);
-                return;
-            }
-        };
-
-        if data.is_empty() {
-            return;;
-        }
-
-        let min_key = data.first().unwrap().0.clone();
-        let max_key = data.last().unwrap().0.clone();
-
-        let file_size = match fs::metadata(path) {
-            Ok(meta) => meta.len(),
-            Err(e) =>  {
-                eprintln!("failed to read metadata for {}: {}", path, e);
-                return;
-            }
-        };
-
-        // Use load_table_metadata to create the SSTable with index + bloom from footer
-        if let Some(table) = Self::load_table_metadata(path, level, min_key, max_key, file_size) {
-            self.register_table(table);
-        }
-    }
-
     fn all_tables(&self) -> impl Iterator<Item = &SSTable> {
         self.l0
             .iter()
@@ -349,10 +322,11 @@ impl SSTableManager {
         let max_key= sorted.last().map(|(k, _)|k.clone()).unwrap();
 
 
-        for table in self.all_tables() {
-            let _= fs::remove_file(&table.path)?;
+        let table_paths: Vec<String> = self.all_tables().map(|t| t.path.clone()).collect();
 
-            self.manifest.append(&ManifestRecord::RemoveTable { path: table.path.clone() })?;
+        for path in &table_paths {
+            let _ = fs::remove_file(path)?;
+            self.manifest.append(&ManifestRecord::RemoveTable { path: path.clone() })?;
         }
 
         self.l0.clear();
@@ -377,6 +351,8 @@ impl SSTableManager {
         let file_size = fs::metadata(&path)?.len();
 
         self.l1.push(SSTable { path, index, bloom, level: Level::L1, min_key, max_key, file_size });
+
+        self.checkpoint_manifest()?;
 
         Ok(())
     }
@@ -428,7 +404,15 @@ impl SSTableManager {
 
         let file_size= fs::metadata(&path)?.len();
 
-        self.l1.push(SSTable { path, index, bloom, level: Level::L1, min_key, max_key, file_size });
+        self.install_table(
+            Level::L1,
+            path,
+            index,
+            bloom,
+            min_key,
+            max_key,
+            file_size,
+        )?;
 
         if self.l1.len() >= L1_COMPACTION_THRESHOLD {
             let _= self.compact_l1_to_l2();
@@ -490,17 +474,6 @@ impl SSTableManager {
 
         let file_size= fs::metadata(&path)?.len();
 
-
-        let new_table= SSTable {
-            path: path.clone(),
-            index, 
-            bloom,
-            level: Level::L2,
-            min_key,
-            max_key,
-            file_size
-        };
-
         for idx in overlapping_indices.iter().rev() {
             let table= self.l2.remove(*idx);
 
@@ -513,7 +486,17 @@ impl SSTableManager {
 
         self.l1.remove(0);
 
-        self.l2.push(new_table);
+        self.install_table(
+            Level::L2,
+            path,
+            index,
+            bloom,
+            min_key,
+            max_key,
+            file_size,
+        )?;
+
+        self.checkpoint_manifest()?;
 
         Ok(())
     }
@@ -566,16 +549,6 @@ impl SSTableManager {
             .map(|(k, _)| k.clone())
             .unwrap();
 
-        let table = SSTable {
-            path: path.clone(),
-            index,
-            bloom,
-            level: Level::L1,
-            min_key,
-            max_key,
-            file_size,
-        };
-
         // Remove candidates in descending index order so that
         // removing one doesn't shift the indices of remaining candidates.
         let mut sorted_candidates = candidates.clone();
@@ -587,7 +560,15 @@ impl SSTableManager {
             fs::remove_file(old.path)?;
         }
 
-        self.l1.push(table);
+        self.install_table(
+            Level::L1,
+            path,
+            index,
+            bloom,
+            min_key,
+            max_key,
+            file_size,
+        )?;
 
         Ok(())
     }
@@ -601,6 +582,43 @@ impl SSTableManager {
             .collect();
 
         self.manifest.write_checkpoint(&tables)
+    }
+
+    pub fn checkpoint_manifest(&mut self) -> Result<()> {
+        self.write_manifest_checkpoint()?;
+
+        self.manifest.clear_log()?;
+
+        Ok(())
+    }
+
+    fn install_table(
+        &mut self,
+        level: Level,
+        path: String,
+        index: SSTableIndex,
+        bloom: BloomFilter,
+        min_key: String,
+        max_key: String,
+        file_size: u64,
+    ) -> Result<()> {
+        let table = SSTable {
+            path,
+            index,
+            bloom,
+            level,
+            min_key,
+            max_key,
+            file_size,
+        };
+
+        self.add_table(table);
+
+        if self.manifest.should_checkpoint() {
+            self.checkpoint_manifest()?;
+        }
+
+        Ok(())
     }
 
 
@@ -664,16 +682,24 @@ impl Manifest {
         Self {
             log_path: path.to_string(),
             checkpoint_path: "MANIFEST.checkpoint".to_string(),
+            operations: 0,
         }
     }
 
-    pub fn append(&self, record: &ManifestRecord) -> Result<()> {
+    pub fn clear_log(&mut self) -> Result<()> {
+        File::create(&self.log_path)?;
+        self.operations= 0;
+        Ok(())
+    }
+
+    pub fn append(&mut self, record: &ManifestRecord) -> Result<()> {
         
         let mut file= OpenOptions::new().create(true).append(true).open(&self.log_path)?;
 
         file.write_all(record.serialize().as_bytes())?;
 
         file.sync_all()?;
+        self.operations += 1;
 
         Ok(())
     }
@@ -740,6 +766,10 @@ impl Manifest {
 
         file.sync_all()?;
         Ok(())
+    }
+
+    pub fn should_checkpoint(&self) -> bool {
+        self.operations >= MANIFEST_CHECKPOINT_INTERVAL
     }
 
 

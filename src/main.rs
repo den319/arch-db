@@ -33,17 +33,14 @@ fn main() {
         for entry in checkpoint {
             match entry {
                 ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
-                    if let Some(table) =
-                        SSTableManager::load_table_metadata(
+                    sstables.load_table_metadata(
                             &path,
                             level,
                             min_key,
                             max_key,
                             file_size,
-                        )
-                    {
-                        sstables.register_table(table);
-                    }
+                    );
+                                        
                 }
                 ManifestRecord::RemoveTable { path } => {
                     let _= path;
@@ -55,17 +52,13 @@ fn main() {
         for entry in logs {
             match entry {
                 ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
-                    if let Some(table) =
-                        SSTableManager::load_table_metadata(
+                        sstables.load_table_metadata(
                             &path,
                             level,
                             min_key,
                             max_key,
                             file_size,
-                        )
-                    {
-                        sstables.register_table(table);
-                    }
+                        );
                 }
                 ManifestRecord::RemoveTable { path } => {
                     // Already handled; skip removed tables
@@ -75,33 +68,6 @@ fn main() {
         }
     }
 
-    // Discover any SSTables on disk not yet tracked in the manifest
-    let dir_entries= fs::read_dir(".").expect("Failed to read directory to load data!");
-
-    for entry in dir_entries {
-        let entry= entry.unwrap();
-
-        let name= entry.file_name();
-        let name= name.to_string_lossy();
-
-        if !name.ends_with(".bin") {
-            continue;
-        }
-
-        let level= if name.starts_with("sst_l0_") {
-            Level::L0
-        } else if name.starts_with("sst_l1_") {
-            Level::L1
-        } else if name.starts_with("sst_l2_") {
-            Level::L2
-        } else {
-            continue;
-        };
-
-        if name.starts_with("sst_") && name.ends_with(".bin") {
-            engine.sstables.lock().unwrap().load_from_file(&name, level);
-        }
-    }
     let mut storage= Storage::new("storage/temp", storage::SyncPolicy::Always).expect("Failed to intialize storage!");
 
     let commands= storage.load().expect("Failed to load database!");
