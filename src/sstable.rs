@@ -173,6 +173,39 @@ pub fn deserialize_bloom(
         .expect("failed to deserialize bloom")
 }
 
+fn serialize_record(key: &str, value: &Value) -> Vec<u8> {
+    // Payload (everything except the checksum)
+    let mut payload = Vec::new();
+
+    payload.push(match value {
+        Value::Data(_) => 1u8,
+        Value::Tombstone => 0u8,
+    });
+
+    payload.extend(&(key.len() as u32).to_be_bytes());
+
+    let value_bytes = match value {
+        Value::Data(v) => v.as_bytes(),
+        Value::Tombstone => b"",
+    };
+
+    payload.extend(&(value_bytes.len() as u32).to_be_bytes());
+
+    payload.extend(key.as_bytes());
+    payload.extend(value_bytes);
+
+    // Compute checksum over the payload only
+    let checksum = hash(&payload);
+
+    // Final record = CRC32 + payload
+    let mut record = Vec::new();
+
+    record.extend(checksum.to_be_bytes());
+    record.extend(payload);
+
+    record
+}
+
 
 pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableIndex> {
     const HEADER_SIZE: u64 = 8; // 4 bytes data_len + 4 bytes CRC32
@@ -193,24 +226,7 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
     let mut is_new_block = true;
 
     for (key, val) in data {
-        let mut record = Vec::new();
-
-        record.push(match val {
-            Value::Data(_) => 1u8,
-            Value::Tombstone => 0u8,
-        });
-
-        record.extend(&(key.len() as u32).to_be_bytes());
-
-        let value_bytes = match val {
-            Value::Data(v) => v.as_bytes(),
-            Value::Tombstone => b"",
-        };
-
-        record.extend(&(value_bytes.len() as u32).to_be_bytes());
-
-        record.extend(key.as_bytes());
-        record.extend(value_bytes);
+        let mut record = serialize_record(key, val);
 
         if block_size + record.len() > BLOCK_SIZE {
             let checksum = hash(&single_block);
@@ -369,42 +385,115 @@ pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
     let mut i = 0;
 
     while i < bytes.len() {
-        let record_type = bytes[i];
 
+        if i + 4 > bytes.len() {
+            break;
+        }
+
+        let stored_crc = u32::from_be_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+        ]);
+
+        i += 4;
+
+       
+        let payload_start = i;
+
+
+        if i >= bytes.len() {
+            break;
+        }
+
+        let record_type = bytes[i];
         i += 1;
 
-        let key_len =
-            u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+        if i + 4 > bytes.len() {
+            break;
+        }
+
+        let key_len = u32::from_be_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+        ]) as usize;
 
         i += 4;
 
-        let val_len =
-            u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+        if i + 4 > bytes.len() {
+            break;
+        }
+
+        let val_len = u32::from_be_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+        ]) as usize;
 
         i += 4;
 
-        let key = String::from_utf8(bytes[i..i + key_len].to_vec()).unwrap();
+        if i + key_len > bytes.len() {
+            break;
+        }
+
+        let key = String::from_utf8(
+            bytes[i..i + key_len].to_vec()
+        ).unwrap();
 
         i += key_len;
 
-        let val = match record_type {
+        let value = match record_type {
+
             1 => {
-                let val = String::from_utf8(bytes[i..i + val_len].to_vec()).unwrap();
+
+                if i + val_len > bytes.len() {
+                    break;
+                }
+
+                let value = String::from_utf8(
+                    bytes[i..i + val_len].to_vec()
+                ).unwrap();
 
                 i += val_len;
 
-                Value::Data(val)
+                Value::Data(value)
             }
+
             0 => {
+
+                if i + val_len > bytes.len() {
+                    break;
+                }
+
                 i += val_len;
+
                 Value::Tombstone
             }
-            _ => panic!("Invalid record type!"),
+
+            _ => break,
         };
 
-        result.push((key, val));
-    }
+        let payload = &bytes[payload_start..i];
 
+        let computed_crc = hash(payload);
+
+        if computed_crc != stored_crc {
+
+            println!(
+                "Corrupted record skipped: {}",
+                key
+            );
+
+            continue;
+        }
+
+        result.push((key, value));
+    }
+    
     Ok(result)
 }
 
@@ -429,14 +518,26 @@ pub fn search_sstable(
 
     file.seek(SeekFrom::Start(record_offset))?;
 
+    let mut crc_buf= [0u8; 4];
+    file.read_exact(&mut crc_buf)?;
+
+    let stored_crc= u32::from_be_bytes((crc_buf));
+
+    let mut payload= Vec::new();
+
+
     let mut type_buf = [0u8; 1];
     file.read_exact(&mut type_buf)?;
+
+    payload.extend(type_buf);
 
     let record_type = type_buf[0];
 
     let mut len_buff = [0u8; 4];
 
     file.read_exact(&mut len_buff)?;
+    payload.extend(len_buff);
+
     let key_len = u32::from_be_bytes(len_buff) as usize;
 
     file.read_exact(&mut len_buff)?;
@@ -445,12 +546,15 @@ pub fn search_sstable(
     let mut key_buff = vec![0u8; key_len];
     file.read_exact(&mut key_buff)?;
 
+    payload.extend(&key_buff);
+
     let found_key = String::from_utf8(key_buff).unwrap();
 
     let value = match record_type {
         1 => {
             let mut val_buf = vec![0u8; val_len];
             file.read_exact(&mut val_buf)?;
+            payload.extend(&val_buf);
 
             Value::Data(String::from_utf8(val_buf).unwrap())
         }
@@ -459,12 +563,25 @@ pub fn search_sstable(
             if val_len > 0 {
                 let mut skip = vec![0u8; val_len];
                 file.read_exact(&mut skip)?;
+                payload.extend(&skip);
+
             }
             Value::Tombstone
         }
 
         _ => panic!("Invalid record type"),
     };
+
+    let computed_crc= hash(&payload);
+
+    if computed_crc != stored_crc {
+        println!(
+            "Corrupted record detected: {}",
+            found_key
+        );
+
+        return Ok(None);
+    }
 
     Ok(Some((found_key, value)))
 }

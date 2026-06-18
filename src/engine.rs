@@ -72,7 +72,7 @@ impl Engine {
 
         Self {
             memtable: BTreeMap::new(),
-            sstables: Arc::new(Mutex::new(SSTableManager::new())),
+            sstables: shared_sstables,
             memtable_limit: 1000,
             compaction_tx: tx,
             block_cache: BlockCache::new(64), // 64 blocks

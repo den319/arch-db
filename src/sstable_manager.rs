@@ -134,17 +134,31 @@ impl SSTableManager {
         min_key: String,
         max_key: String,
         file_size: u64, 
-    ) -> SSTable {
+    ) -> Option<SSTable> {
 
-        let index =
-            load_index_from_footer(path)
-                .unwrap();
+        // Skip if the file no longer exists (e.g. cleaned up by a previous compaction or test)
+        if !std::path::Path::new(path).exists() {
+            eprintln!("Warning: SSTable not found, skipping: {}", path);
+            return None;
+        }
 
-        let bloom =
-            load_bloom_from_footer(path)
-                .unwrap();
+        let index = match load_index_from_footer(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Warning: failed to load footer {}: {}", path, e);
+                return None;
+            }
+        };
 
-        SSTable {
+        let bloom = match load_bloom_from_footer(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Warning: failed to load bloom footer {}: {}", path, e);
+                return None;
+            }
+        };
+
+        Some(SSTable {
             path: path.to_string(),
             index,
             bloom,
@@ -152,7 +166,7 @@ impl SSTableManager {
             min_key,
             max_key,
             file_size,
-        }
+        })
     }
 
     pub fn add_table(&mut self, table: SSTable) {
@@ -282,9 +296,9 @@ impl SSTableManager {
             .len();
 
         // Use load_table_metadata to create the SSTable with index + bloom from footer
-        let table = Self::load_table_metadata(path, level, min_key, max_key, file_size);
-
-        self.add_table(table);
+        if let Some(table) = Self::load_table_metadata(path, level, min_key, max_key, file_size) {
+            self.add_table(table);
+        }
     }
 
     fn all_tables(&self) -> impl Iterator<Item = &SSTable> {

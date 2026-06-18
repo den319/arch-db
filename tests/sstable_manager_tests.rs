@@ -527,7 +527,8 @@ fn test_load_table_metadata() {
             "apple".into(),
             "banana".into(),
             size,
-        );
+        )
+        .expect("load_table_metadata should succeed");
 
     assert_eq!(
         table.min_key,

@@ -16,7 +16,7 @@ use parser::parse;
 use command::Command;
 use storage::Storage;
 
-use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id, ManifestRecord};
+use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id, ManifestRecord, SSTableManager};
 
 fn main() {
     init_sstable_counter();
@@ -24,14 +24,26 @@ fn main() {
     let mut engine= Engine::new();
 
     // Replay manifest to restore known SSTables
+    // Uses load_table_metadata with manifest's stored min_key/max_key/file_size
+    // instead of scanning the full SSTable data — O(number of SSTables), not O(total data)
     {
         let mut sstables = engine.sstables.lock().unwrap();
         let entries = sstables.manifest.load().expect("Failed to load manifest");
 
         for entry in entries {
             match entry {
-                ManifestRecord::AddTable { level, path, .. } => {
-                    sstables.load_from_file(&path, level);
+                ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
+                    if let Some(table) =
+                        SSTableManager::load_table_metadata(
+                            &path,
+                            level,
+                            min_key,
+                            max_key,
+                            file_size,
+                        )
+                    {
+                        sstables.add_table(table);
+                    }
                 }
                 ManifestRecord::RemoveTable { path } => {
                     // Already handled; skip removed tables
