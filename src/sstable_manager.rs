@@ -102,12 +102,16 @@ pub fn next_sstable_id() -> u64 {
 
 impl SSTableManager {
     pub fn new() -> Self {
+        Self::with_manifest_path("MANIFEST.log")
+    }
+
+    pub fn with_manifest_path(path: &str) -> Self {
         Self {
             l0: Vec::new(),
             l1: Vec::new(),
             l2: Vec::new(),
             strategy: CompactionStrategy::Leveled,
-            manifest: Manifest::new("MANIFEST.log"),
+            manifest: Manifest::new(path),
         }
     }
 
@@ -684,6 +688,10 @@ impl Manifest {
             checkpoint_path: "MANIFEST.checkpoint".to_string(),
             operations: 0,
         }
+    }
+
+    pub fn set_checkpoint_path(&mut self, path: &str) {
+        self.checkpoint_path = path.to_string();
     }
 
     pub fn clear_log(&mut self) -> Result<()> {
