@@ -4,10 +4,9 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 
-use bloom::ASMS;
 use crc32fast::hash;
 
-use crate::{engine::Value, error::Result, sstable_manager::SSTable};
+use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable_manager::SSTable};
 
 #[derive(Debug, Clone)]
 pub struct BlockMeta {
@@ -34,7 +33,7 @@ pub struct FooterMetadata {
 pub struct LoadedFooter {
     pub metadata: FooterMetadata,
     pub index: SSTableIndex,
-    pub bloom: bloom::BloomFilter,
+    pub bloom: BloomFilter,
 }
 
 pub const BLOCK_SIZE: usize = 40;
@@ -159,15 +158,17 @@ impl SSTableIndex {
 }
 
 pub fn serialize_bloom(
-    bloom: &bloom::BloomFilter,
+    bloom: &BloomFilter,
 ) -> Vec<u8> {
-    bincode::serialize(bloom)
-        .expect("failed to serialize bloom")
+    // Manual serialization to avoid bincode compatibility issues with custom serde impl
+    let bits_bytes = bincode::serialize(bloom)
+        .expect("failed to serialize bloom");
+    bits_bytes
 }
 
 pub fn deserialize_bloom(
     bytes: &[u8],
-) -> bloom::BloomFilter {
+) -> BloomFilter {
     bincode::deserialize(bytes)
         .expect("failed to deserialize bloom")
 }
@@ -190,8 +191,6 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
     let mut file = File::create(path)?;
 
     let mut is_new_block = true;
-
-    // println!("data: {:?}", data);
 
     for (key, val) in data {
         let mut record = Vec::new();
@@ -282,9 +281,9 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
     file.write_all(&serialized_index)?;
 
     let mut bloom =
-        bloom::BloomFilter::with_rate(
+        BloomFilter::with_rate(
             0.01,
-            data.len().max(1),
+            data.len().max(1) as u32,
         );
 
     for (key, _) in data {
@@ -366,8 +365,6 @@ pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
         bytes.extend(block);
     }
 
-    // println!("{:?}", bytes);
-
     let mut result = Vec::new();
     let mut i = 0;
 
@@ -416,8 +413,6 @@ pub fn search_sstable(
     index: &SSTableIndex,
     key: &str,
 ) -> Result<Option<(String, Value)>> {
-    // println!("file path: {}", path);
-
     let mut file = File::open(path)?;
 
     let block = match find_block(index, key) {
@@ -477,23 +472,14 @@ pub fn search_sstable(
 pub fn find_block<'a>(index: &'a SSTableIndex, key: &str) -> Option<&'a BlockMeta> {
     let mut candidate = None;
 
-    println!("BLOCKS: {:?}", index.blocks);
-
     for block in &index.blocks {
         if key >= block.start_key.as_str() {
             candidate = Some(block);
         } else {
             break;
         }
-        println!(
-            "find_block: key = {}, start_key = {}, chosen offset = {:?}",
-            key,
-            block.start_key.as_str(),
-            candidate
-        );
     }
 
-    println!("find_block: final chosen offset = {:?}", candidate);
     candidate
 }
 
@@ -588,9 +574,16 @@ pub fn serialize_index(index: &SSTableIndex) -> Vec<u8> {
 
     for block in &index.blocks {
         bytes.extend(&(block.start_key.len() as u32).to_be_bytes());
-
         bytes.extend(block.start_key.as_bytes());
         bytes.extend(block.offset.to_be_bytes());
+
+        // Serialize record_offset entries for this block
+        bytes.extend(&(block.record_offset.len() as u32).to_be_bytes());
+        for (key, off) in &block.record_offset {
+            bytes.extend(&(key.len() as u32).to_be_bytes());
+            bytes.extend(key.as_bytes());
+            bytes.extend(off.to_be_bytes());
+        }
     }
 
     bytes
@@ -620,10 +613,36 @@ pub fn deserialize_index(bytes: &[u8]) -> SSTableIndex {
             bytes[i + 7],
         ]);
         i += 8;
+
+        // Deserialize record_offset entries for this block
+        let record_count =
+            u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+        i += 4;
+        let mut record_offset = BTreeMap::new();
+        for _ in 0..record_count {
+            let rkey_len =
+                u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+            i += 4;
+            let rkey = String::from_utf8(bytes[i..i + rkey_len].to_vec()).unwrap();
+            i += rkey_len;
+            let roff = u64::from_be_bytes([
+                bytes[i],
+                bytes[i + 1],
+                bytes[i + 2],
+                bytes[i + 3],
+                bytes[i + 4],
+                bytes[i + 5],
+                bytes[i + 6],
+                bytes[i + 7],
+            ]);
+            i += 8;
+            record_offset.insert(rkey, roff);
+        }
+
         blocks.push(BlockMeta {
             start_key,
             offset,
-            record_offset: BTreeMap::new(),
+            record_offset,
         });
     }
     SSTableIndex {
@@ -706,7 +725,7 @@ pub fn load_index_from_footer(
 
 pub fn load_bloom_from_footer(
     path: &str,
-) -> Result<bloom::BloomFilter> {
+) -> Result<BloomFilter> {
 
     let footer =
         read_footer(path)?;

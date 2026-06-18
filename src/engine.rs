@@ -1,8 +1,6 @@
 use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync::{Arc, Mutex, mpsc::{self, Sender}}, thread};
 
-use bloom::{ASMS, BloomFilter};
-
-use crate::{cache::CacheKey, command::Command, error::Result, sstable::{find_block, read_block, read_sstable, search_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
+use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, error::Result, sstable::{find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
 use crate::cache::BlockCache;
 
 

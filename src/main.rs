@@ -7,6 +7,7 @@ mod sstable;
 mod sstable_manager;
 mod helper;
 mod cache;
+mod bloom_filter;
 
 use std::{fs, io::{self, Write}};
 

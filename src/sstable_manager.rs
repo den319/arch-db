@@ -1,8 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, sync::atomic::{AtomicU64, Ordering}};
 
-use bloom::{ASMS, BloomFilter};
-
-use crate::{engine::Value, error::Result, sstable::{BLOCK_SIZE, BlockMeta, SSTableIndex, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
+use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable::{SSTableIndex, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +128,33 @@ impl SSTableManager {
         Ok(())
     }
 
+    pub fn load_table_metadata(
+        path: &str,
+        level: Level,
+        min_key: String,
+        max_key: String,
+        file_size: u64, 
+    ) -> SSTable {
+
+        let index =
+            load_index_from_footer(path)
+                .unwrap();
+
+        let bloom =
+            load_bloom_from_footer(path)
+                .unwrap();
+
+        SSTable {
+            path: path.to_string(),
+            index,
+            bloom,
+            level,
+            min_key,
+            max_key,
+            file_size,
+        }
+    }
+
     pub fn add_table(&mut self, table: SSTable) {
         // Extract data before moving `table` into the Vec
         let level = table.level;
@@ -240,15 +265,7 @@ impl SSTableManager {
             return;
         }
 
-        let index = match load_index_from_footer(path) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Warning: failed to load footer {}: {}", path, e);
-                return;
-            }
-        };
-
-        // Read the full SSTable data to extract min/max keys and build bloom filter
+        // Read the full SSTable data to extract min/max keys
         let data = match read_sstable(path) {
             Ok(d) => d,
             Err(e) => {
@@ -260,28 +277,12 @@ impl SSTableManager {
         let min_key = data.first().map(|(k, _)| k.clone()).unwrap_or_default();
         let max_key = data.last().map(|(k, _)| k.clone()).unwrap_or_default();
 
-        let size = data.len().max(8) as u32;
-        let mut bloom = BloomFilter::with_rate(0.01, size);
-
-        for (k, _) in &data {
-            bloom.insert(k);
-        }
-
         let file_size = fs::metadata(path)
             .expect("failed to read metadata")
             .len();
 
-        let table = SSTable {
-            path: path.to_string(),
-            index,
-            bloom,
-            level,
-            min_key,
-            max_key,
-            file_size,
-        };
-
-        // println!("{:?}", table);
+        // Use load_table_metadata to create the SSTable with index + bloom from footer
+        let table = Self::load_table_metadata(path, level, min_key, max_key, file_size);
 
         self.add_table(table);
     }

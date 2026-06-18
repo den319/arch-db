@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 use std::fs;
 
-use bloom::BloomFilter;
+use arch_db::bloom_filter::BloomFilter;
 
 use arch_db::command::Command;
 use arch_db::engine::{Engine, Value};

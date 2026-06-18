@@ -1,7 +1,8 @@
 use std::fs;
 
 use arch_db::engine::Value;
-use arch_db::sstable::{find_block, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
+use arch_db::helper::unique_file;
+use arch_db::sstable::{find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
 
 fn sample_data() -> Vec<(String, Value)> {
     vec![
@@ -93,7 +94,7 @@ fn test_record_offsets_exist() {
 #[test]
 fn test_overlap_detection() {
     use std::collections::BTreeMap;
-    use bloom::BloomFilter;
+    use arch_db::bloom_filter::BloomFilter;
     use arch_db::sstable::SSTableIndex;
     use arch_db::sstable_manager::{SSTable, Level};
 
@@ -290,11 +291,11 @@ fn test_load_bloom_from_footer() {
         ).unwrap();
 
     assert!(
-        bloom.contains("apple")
+        bloom.contains(&"apple".to_string())
     );
 
     assert!(
-        bloom.contains("banana")
+        bloom.contains(&"banana".to_string())
     );
 
     std::fs::remove_file(file)
