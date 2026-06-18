@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync::{Arc, Mutex, mpsc::{self, Sender}}, thread};
 
-use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, error::Result, sstable::{find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
+use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, error::Result, sstable::{binary_search_block, find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
 use crate::cache::BlockCache;
 
 
@@ -257,15 +257,8 @@ impl Engine {
         // Cache hit — no disk I/O
         if let Some(records) = cache.get(&cache_key) {
             println!("CACHE HIT: {:?}", cache_key);
-            for (k, v) in &records {
-                if k == key {
-                    match v {
-                        Value::Tombstone => return Some(Value::Tombstone),
-                        _ => return Some(v.clone()),
-                    }
-                }
-            }
-            return None;
+
+            return binary_search_block(&records, key);
         }
 
         // Cache miss — read from disk (lock is NOT held at this point)
@@ -280,16 +273,7 @@ impl Engine {
 
         cache.insert(cache_key, records.clone());
 
-        for (k, v) in &records {
-            if k == key {
-                match v {
-                    Value::Tombstone => return Some(Value::Tombstone),
-                    _ => return Some(v.clone()),
-                }
-            }
-        }
-
-        None
+        return binary_search_block(&records, key);
 
     }
 

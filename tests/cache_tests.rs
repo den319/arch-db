@@ -1,5 +1,6 @@
 use arch_db::cache::{BlockCache, CacheKey};
 use arch_db::engine::Value;
+use arch_db::sstable::BlockRecord;
 
 #[test]
 fn test_cache_insert_get() {
@@ -12,7 +13,7 @@ fn test_cache_insert_get() {
 
     cache.insert(
         key.clone(),
-        vec![("x".into(), Value::Data("1".into()))],
+        vec![BlockRecord {key: "x".into(), value: Value::Data("1".into())}],
     );
 
     let result = cache.get(&key);

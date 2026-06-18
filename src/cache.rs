@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::engine::Value;
+use crate::{engine::Value, sstable::BlockRecord};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct CacheKey {
@@ -10,7 +10,7 @@ pub struct CacheKey {
 
 pub struct BlockCache {
     capacity: usize,
-    map: HashMap<CacheKey, Vec<(String, Value)>>,
+    map: HashMap<CacheKey, Vec<BlockRecord>>,
     usage: VecDeque<CacheKey>,
 }
 
@@ -23,7 +23,7 @@ impl BlockCache {
         }
     }
     
-    pub fn get(&mut self, key: &CacheKey) -> Option<Vec<(String, Value)>> {
+    pub fn get(&mut self, key: &CacheKey) -> Option<Vec<BlockRecord>> {
         if let Some(value)= self.map.get(key) {
             self.usage.retain(|k| k != key);
 
@@ -35,7 +35,7 @@ impl BlockCache {
         None
     }
 
-    pub fn insert(&mut self, key: CacheKey, value: Vec<(String, Value)>) {
+    pub fn insert(&mut self, key: CacheKey, value: Vec<BlockRecord>) {
         if self.map.contains_key(&key) {
             self.usage.retain(|k| k!= &key);
         }

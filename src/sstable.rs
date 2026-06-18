@@ -5,6 +5,7 @@ use std::{
 };
 
 use crc32fast::hash;
+use snap::raw::{Decoder, Encoder};
 
 use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable_manager::SSTable};
 
@@ -30,10 +31,9 @@ pub struct FooterMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoadedFooter {
-    pub metadata: FooterMetadata,
-    pub index: SSTableIndex,
-    pub bloom: BloomFilter,
+pub struct BlockRecord {
+    pub key: String,
+    pub value: Value,
 }
 
 pub const BLOCK_SIZE: usize = 40;
@@ -208,7 +208,10 @@ fn serialize_record(key: &str, value: &Value) -> Vec<u8> {
 
 
 pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableIndex> {
-    const HEADER_SIZE: u64 = 8; // 4 bytes data_len + 4 bytes CRC32
+    const HEADER_SIZE: u64 = 12; 
+    // compressed_len (4)
+    // original_len (4)
+    // crc32 (4)
 
     let mut offsets = BTreeMap::new();
     let mut file_offset = 0u64;
@@ -229,14 +232,22 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
         let mut record = serialize_record(key, val);
 
         if block_size + record.len() > BLOCK_SIZE {
-            let checksum = hash(&single_block);
-            let data_len = single_block.len() as u32;
+            let compressed =
+                Encoder::new()
+                    .compress_vec(&single_block)
+                    .expect("compression failed");
 
-            file.write_all(&data_len.to_be_bytes())?;
+            let compressed_len = compressed.len() as u32;
+            let original_len = single_block.len() as u32;
+
+            let checksum = hash(&compressed);
+
+            file.write_all(&compressed_len.to_be_bytes())?;
+            file.write_all(&original_len.to_be_bytes())?;
             file.write_all(&checksum.to_be_bytes())?;
-            file.write_all(&single_block)?;
+            file.write_all(&compressed)?;
 
-            file_offset += HEADER_SIZE + single_block.len() as u64;
+            file_offset += HEADER_SIZE + compressed.len() as u64;
 
             if let Some(last_block) = blocks.last_mut() {
                 last_block.record_offset = current_block_offsets.clone();
@@ -273,12 +284,20 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
             last_block.record_offset = current_block_offsets.clone();
         }
 
-        let checksum = hash(&single_block);
-        let data_len = single_block.len() as u32;
+        let compressed =
+            Encoder::new()
+                .compress_vec(&single_block)
+                .expect("compression failed");
 
-        file.write_all(&data_len.to_be_bytes())?;
+        let compressed_len = compressed.len() as u32;
+        let original_len = single_block.len() as u32;
+
+        let checksum = hash(&compressed);
+
+        file.write_all(&compressed_len.to_be_bytes())?;
+        file.write_all(&original_len.to_be_bytes())?;
         file.write_all(&checksum.to_be_bytes())?;
-        file.write_all(&single_block)?;
+        file.write_all(&compressed)?;
     }
 
     blocks.sort_by(|a, b| a.start_key.cmp(&b.start_key));
@@ -351,33 +370,43 @@ pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
             break;
         }
 
-        // Each block is prefixed with: 4-byte data_len + 4-byte CRC32
+        // ---------- Read header ----------
+
+        // compressed size
         let mut len_buf = [0u8; 4];
+        file.read_exact(&mut len_buf)?;
+        let compressed_len = u32::from_be_bytes(len_buf) as usize;
 
-        match file.read_exact(&mut len_buf) {
-            Ok(()) => {}
-            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
-        }
+        // original size
+        file.read_exact(&mut len_buf)?;
+        let original_len = u32::from_be_bytes(len_buf) as usize;
 
-        let data_len = u32::from_be_bytes(len_buf) as usize;
-
+        // checksum
         let mut checksum_buf = [0u8; 4];
         file.read_exact(&mut checksum_buf)?;
-
         let stored_checksum = u32::from_be_bytes(checksum_buf);
 
-        let mut block = vec![0u8; data_len];
+        // ---------- Read compressed block ----------
 
-        file.read_exact(&mut block)?;
+        let mut compressed = vec![0u8; compressed_len];
+        file.read_exact(&mut compressed)?;
 
-        let computed_checksum = hash(&block);
+        let computed_checksum = hash(&compressed);
 
         if computed_checksum != stored_checksum {
             println!("CORRUPTED SSTABLE BLOCK DETECTED");
             return Ok(vec![]);
         }
 
+        // ---------- Decompress ----------
+
+        let block = Decoder::new()
+            .decompress_vec(&compressed)
+            .expect("Failed to decompress block");
+
+        assert_eq!(block.len(), original_len);
+
+        // Append decompressed bytes
         bytes.extend(block);
     }
 
@@ -521,7 +550,7 @@ pub fn search_sstable(
     let mut crc_buf= [0u8; 4];
     file.read_exact(&mut crc_buf)?;
 
-    let stored_crc= u32::from_be_bytes((crc_buf));
+    let stored_crc= u32::from_be_bytes(crc_buf);
 
     let mut payload= Vec::new();
 
@@ -541,6 +570,8 @@ pub fn search_sstable(
     let key_len = u32::from_be_bytes(len_buff) as usize;
 
     file.read_exact(&mut len_buff)?;
+    payload.extend(len_buff);
+
     let val_len = u32::from_be_bytes(len_buff) as usize;
 
     let mut key_buff = vec![0u8; key_len];
@@ -600,40 +631,75 @@ pub fn find_block<'a>(index: &'a SSTableIndex, key: &str) -> Option<&'a BlockMet
     candidate
 }
 
-pub fn read_block(path: &str, offset: u64) -> Result<Vec<(String, Value)>> {
+pub fn read_block(path: &str, offset: u64) -> Result<Vec<BlockRecord>> {
     let mut file = File::open(path)?;
 
     // Each block starts with: 4-byte data_len + 4-byte CRC32 + data
     // offset points to the start of the header
     file.seek(SeekFrom::Start(offset))?;
 
+    // compressed block size
     let mut len_buf = [0u8; 4];
     file.read_exact(&mut len_buf)?;
-    let data_len = u32::from_be_bytes(len_buf) as usize;
+    let compressed_len = u32::from_be_bytes(len_buf) as usize;
 
-    // Skip the 4-byte CRC32
+    // original block size
+    file.read_exact(&mut len_buf)?;
+    let original_len = u32::from_be_bytes(len_buf) as usize;
+
+    // checksum
     let mut checksum_buf = [0u8; 4];
     file.read_exact(&mut checksum_buf)?;
-
     let stored_checksum = u32::from_be_bytes(checksum_buf);
 
-    let mut block = vec![0u8; data_len];
-    file.read_exact(&mut block)?;
+    let mut compressed = vec![0u8; compressed_len];
+    file.read_exact(&mut compressed)?;
 
-    let computed_checksum = hash(&block);
+    let computed_checksum = hash(&compressed);
 
     if computed_checksum != stored_checksum {
         println!("CORRUPTED SSTABLE BLOCK DETECTED");
         return Ok(vec![]);
     }
 
-    let mut result = vec![];
+    // ---------- Decompress ----------
+
+    let block = Decoder::new()
+        .decompress_vec(&compressed)
+        .expect("Failed to decompress block");
+
+    if block.len() != original_len {
+        println!("Corrupted block: decompressed size mismatch");
+        return Ok(vec![]);
+    }
+
+    let mut result:Vec<BlockRecord> = vec![];
 
     let mut i = 0;
     while i < block.len() {
-        let record_type = block[i];
+        // Each record starts with 4-byte CRC (written by serialize_record)
+        if i + 4 > block.len() {
+            break;
+        }
 
+        let stored_crc = u32::from_be_bytes([
+            block[i],
+            block[i + 1],
+            block[i + 2],
+            block[i + 3],
+        ]);
+
+        i += 4;
+
+        if i >= block.len() {
+            break;
+        }
+
+        let payload_start = i;
+
+        let record_type = block[i];
         i += 1;
+
         if i + 8 > block.len() {
             break;
         }
@@ -670,6 +736,10 @@ pub fn read_block(path: &str, offset: u64) -> Result<Vec<(String, Value)>> {
             }
 
             0 => {
+                if i + val_len > block.len() {
+                    break;
+                }
+
                 i += val_len;
 
                 Value::Tombstone
@@ -678,7 +748,19 @@ pub fn read_block(path: &str, offset: u64) -> Result<Vec<(String, Value)>> {
             _ => break,
         };
 
-        result.push((key, value));
+        // Verify per-record CRC
+        let payload = &block[payload_start..i];
+        let computed_crc = hash(payload);
+
+        if computed_crc != stored_crc {
+            println!(
+                "Corrupted record skipped: {}",
+                key
+            );
+            continue;
+        }
+
+        result.push(BlockRecord { key, value });
     }
 
     Ok(result)
@@ -870,4 +952,14 @@ pub fn load_bloom_from_footer(
             &bytes
         )
     )
+}
+
+pub fn binary_search_block(
+    records: &[BlockRecord],
+    key: &str,
+) -> Option<Value> {
+    match records.binary_search_by(|record| record.key.as_str().cmp(key)) {
+        Ok(index) => Some(records[index].value.clone()),
+        Err(_) => None,
+    }
 }
