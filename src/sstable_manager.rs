@@ -57,7 +57,8 @@ pub struct SSTable {
 }
 
 pub struct Manifest {
-    path: String,
+    log_path: String,
+    checkpoint_path: String,
 }
 
 
@@ -177,11 +178,7 @@ impl SSTableManager {
         let max_key = table.max_key.clone();
         let file_size = table.file_size;
 
-        match level {
-            Level::L0 => self.l0.push(table),
-            Level::L1 => self.l1.push(table),
-            Level::L2 => self.l2.push(table),
-        }
+        self.register_table(table);
 
         let _= self.manifest.append(
             &ManifestRecord::AddTable { 
@@ -192,6 +189,14 @@ impl SSTableManager {
                 file_size, 
             }
         );
+    }
+
+    pub fn register_table(&mut self, table: SSTable) {
+        match table.level {
+            Level::L0 => self.l0.push(table),
+            Level::L1 => self.l1.push(table),
+            Level::L2 => self.l2.push(table),
+        }
     }
 
     pub fn find_size_tiered_candidates(&self) -> Vec<usize> {
@@ -283,21 +288,29 @@ impl SSTableManager {
         let data = match read_sstable(path) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Warning: failed to read SSTable {}: {}", path, e);
+                eprintln!("Warning: failed to read SSTable at {}: {}", path, e);
                 return;
             }
         };
 
-        let min_key = data.first().map(|(k, _)| k.clone()).unwrap_or_default();
-        let max_key = data.last().map(|(k, _)| k.clone()).unwrap_or_default();
+        if data.is_empty() {
+            return;;
+        }
 
-        let file_size = fs::metadata(path)
-            .expect("failed to read metadata")
-            .len();
+        let min_key = data.first().unwrap().0.clone();
+        let max_key = data.last().unwrap().0.clone();
+
+        let file_size = match fs::metadata(path) {
+            Ok(meta) => meta.len(),
+            Err(e) =>  {
+                eprintln!("failed to read metadata for {}: {}", path, e);
+                return;
+            }
+        };
 
         // Use load_table_metadata to create the SSTable with index + bloom from footer
         if let Some(table) = Self::load_table_metadata(path, level, min_key, max_key, file_size) {
-            self.add_table(table);
+            self.register_table(table);
         }
     }
 
@@ -579,6 +592,17 @@ impl SSTableManager {
         Ok(())
     }
 
+    pub fn write_manifest_checkpoint(&self) -> Result<()> {
+        let tables: Vec<&SSTable> = self
+            .l0
+            .iter()
+            .chain(self.l1.iter())
+            .chain(self.l2.iter())
+            .collect();
+
+        self.manifest.write_checkpoint(&tables)
+    }
+
 
 }
 
@@ -638,13 +662,14 @@ impl ManifestRecord {
 impl Manifest {
     pub fn new(path: &str) -> Self {
         Self {
-            path: path.to_string(),
+            log_path: path.to_string(),
+            checkpoint_path: "MANIFEST.checkpoint".to_string(),
         }
     }
 
     pub fn append(&self, record: &ManifestRecord) -> Result<()> {
         
-        let mut file= OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut file= OpenOptions::new().create(true).append(true).open(&self.log_path)?;
 
         file.write_all(record.serialize().as_bytes())?;
 
@@ -653,12 +678,12 @@ impl Manifest {
         Ok(())
     }
 
-    pub fn load(&self) -> Result<Vec<ManifestRecord>> {
-        if !std::path::Path::new(&self.path).exists() {
+    pub fn load_log(&self) -> Result<Vec<ManifestRecord>> {
+        if !std::path::Path::new(&self.log_path).exists() {
             return Ok(vec![]);
         }
 
-        let file= File::open(&self.path)?;
+        let file= File::open(&self.log_path)?;
 
         let reader= BufReader::new(file);
 
@@ -674,6 +699,50 @@ impl Manifest {
 
         Ok(records)
     }
+
+    pub fn load_checkpoint(&self) -> Result<Vec<ManifestRecord>> {
+        if !std::path::Path::new(&self.checkpoint_path).exists() {
+            return Ok(vec![]);
+        }
+
+        let file = File::open(&self.checkpoint_path)?;
+        let reader = BufReader::new(file);
+
+        let mut records = vec![];
+
+        for line in reader.lines() {
+            let line = line?;
+
+            if let Some(record) = ManifestRecord::deserialize(&line) {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn write_checkpoint(
+        &self,
+        tables: &[&SSTable],
+    ) -> Result<()> {
+
+        let mut file = File::create(&self.checkpoint_path)?;
+        for table in tables {
+            let record = ManifestRecord::AddTable {
+                level: table.level,
+                path: table.path.clone(),
+                min_key: table.min_key.clone(),
+                max_key: table.max_key.clone(),
+                file_size: table.file_size,
+            };
+            file.write_all(record.serialize().as_bytes())?;
+        }   
+
+        file.sync_all()?;
+        Ok(())
+    }
+
+
 }
 
 

@@ -433,7 +433,7 @@ fn test_manifest_append_and_load() {
     ).unwrap();
 
     let records =
-        manifest.load().unwrap();
+        manifest.load_log().unwrap();
 
     assert_eq!(
         records.len(),
@@ -463,7 +463,7 @@ fn test_manifest_remove_table() {
     ).unwrap();
 
     let records =
-        manifest.load().unwrap();
+        manifest.load_log().unwrap();
 
     assert_eq!(
         records.len(),

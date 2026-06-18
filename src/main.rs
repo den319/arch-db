@@ -28,9 +28,9 @@ fn main() {
     // instead of scanning the full SSTable data — O(number of SSTables), not O(total data)
     {
         let mut sstables = engine.sstables.lock().unwrap();
-        let entries = sstables.manifest.load().expect("Failed to load manifest");
+        let checkpoint= sstables.manifest.load_checkpoint().expect("Failed to load checkpoint");
 
-        for entry in entries {
+        for entry in checkpoint {
             match entry {
                 ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
                     if let Some(table) =
@@ -42,7 +42,29 @@ fn main() {
                             file_size,
                         )
                     {
-                        sstables.add_table(table);
+                        sstables.register_table(table);
+                    }
+                }
+                ManifestRecord::RemoveTable { path } => {
+                    let _= path;
+                }
+            }
+        }
+        let logs = sstables.manifest.load_log().expect("Failed to load manifest");
+
+        for entry in logs {
+            match entry {
+                ManifestRecord::AddTable { level, path, min_key, max_key, file_size } => {
+                    if let Some(table) =
+                        SSTableManager::load_table_metadata(
+                            &path,
+                            level,
+                            min_key,
+                            max_key,
+                            file_size,
+                        )
+                    {
+                        sstables.register_table(table);
                     }
                 }
                 ManifestRecord::RemoveTable { path } => {

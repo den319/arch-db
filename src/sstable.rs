@@ -531,90 +531,21 @@ pub fn search_sstable(
     index: &SSTableIndex,
     key: &str,
 ) -> Result<Option<(String, Value)>> {
-    let mut file = File::open(path)?;
-
     let block = match find_block(index, key) {
         Some(o) => o,
         None => return Ok(None),
     };
 
-    let record_offset = match block.record_offset.get(key) {
-        Some(offset) => *offset,
-        None => return Ok(None),
-    };
+    // Read and decompress the entire block, then search for the key
+    let records = read_block(path, block.offset)?;
 
-    println!("reading block at offset: {}", record_offset);
-
-    file.seek(SeekFrom::Start(record_offset))?;
-
-    let mut crc_buf= [0u8; 4];
-    file.read_exact(&mut crc_buf)?;
-
-    let stored_crc= u32::from_be_bytes(crc_buf);
-
-    let mut payload= Vec::new();
-
-
-    let mut type_buf = [0u8; 1];
-    file.read_exact(&mut type_buf)?;
-
-    payload.extend(type_buf);
-
-    let record_type = type_buf[0];
-
-    let mut len_buff = [0u8; 4];
-
-    file.read_exact(&mut len_buff)?;
-    payload.extend(len_buff);
-
-    let key_len = u32::from_be_bytes(len_buff) as usize;
-
-    file.read_exact(&mut len_buff)?;
-    payload.extend(len_buff);
-
-    let val_len = u32::from_be_bytes(len_buff) as usize;
-
-    let mut key_buff = vec![0u8; key_len];
-    file.read_exact(&mut key_buff)?;
-
-    payload.extend(&key_buff);
-
-    let found_key = String::from_utf8(key_buff).unwrap();
-
-    let value = match record_type {
-        1 => {
-            let mut val_buf = vec![0u8; val_len];
-            file.read_exact(&mut val_buf)?;
-            payload.extend(&val_buf);
-
-            Value::Data(String::from_utf8(val_buf).unwrap())
+    for record in &records {
+        if record.key == key {
+            return Ok(Some((record.key.clone(), record.value.clone())));
         }
-
-        0 => {
-            if val_len > 0 {
-                let mut skip = vec![0u8; val_len];
-                file.read_exact(&mut skip)?;
-                payload.extend(&skip);
-
-            }
-            Value::Tombstone
-        }
-
-        _ => panic!("Invalid record type"),
-    };
-
-    let computed_crc= hash(&payload);
-
-    if computed_crc != stored_crc {
-        println!(
-            "Corrupted record detected: {}",
-            found_key
-        );
-
-        return Ok(None);
     }
 
-    Ok(Some((found_key, value)))
+    Ok(None)
 }
 
 pub fn find_block<'a>(index: &'a SSTableIndex, key: &str) -> Option<&'a BlockMeta> {
