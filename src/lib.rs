@@ -8,3 +8,4 @@ pub mod sstable_manager;
 pub mod helper;
 pub mod cache;
 pub mod bloom_filter;
+pub mod schema;

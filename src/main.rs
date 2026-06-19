@@ -8,15 +8,16 @@ mod sstable_manager;
 mod helper;
 mod cache;
 mod bloom_filter;
+mod schema;
 
-use std::{fs, io::{self, Write}};
+use std::{io::{self, Write}};
 
 use engine::Engine;
 use parser::parse;
 use command::Command;
 use storage::Storage;
 
-use crate::sstable_manager::{Level, init_sstable_counter, next_sstable_id, ManifestRecord, SSTableManager};
+use crate::sstable_manager::{init_sstable_counter, next_sstable_id, ManifestRecord, SSTableManager};
 
 fn main() {
     init_sstable_counter();
