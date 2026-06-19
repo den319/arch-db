@@ -39,12 +39,15 @@ pub struct BlockRecord {
 pub struct SSTableIterator {
     file: File,
     index: SSTableIndex,
-    current_block: usize,
-    block_records: Vec<(String, Value)>,
-    record_pos: usize,
+    current_block: Option<usize>,
+    block_records: Vec<BlockRecord>,
+    current_record: usize,
 }
 
 pub const BLOCK_SIZE: usize = 40;
+const MAGIC: &[u8; 4] = b"ARCH";
+const FORMAT_VERSION: u32 = 1;
+const HEADER_SIZE: u64 = 8;
 
 impl SSTable {
     pub fn overlaps(&self, min_key: &str, max_key: &str) -> bool {
@@ -58,54 +61,107 @@ impl SSTable {
 
 impl SSTableIterator {
     pub fn new(path: &str, index: SSTableIndex) -> Result<Self> {
-        let file = File::open(path)?;
+        let mut file = File::open(path)?;
+
 
         Ok(Self {
             file,
             index,
-            current_block: 0,
+            current_block: None,
             block_records: Vec::new(),
-            record_pos: 0,
+            current_record: 0,
         })
     }
 
     fn load_current_block(&mut self) -> Result<bool> {
-        if self.current_block >= self.index.blocks.len() {
+
+        let block_index= match self.current_block {
+            Some(index) => index,
+            None => return Ok(false),
+        };
+
+        if block_index >= self.index.blocks.len() {
             return Ok(false);
         }
 
-        let offset = self.index.blocks[self.current_block].offset;
+        let offset = self.index.blocks[block_index].offset;
 
         self.block_records = read_block_from_file(&mut self.file, offset)?;
 
-        self.record_pos = 0;
+        self.current_record = 0;
 
         Ok(true)
     }
 
+    fn load_next_block(&mut self) -> Result<bool> {
+        let next = match self.current_block {
+            None => 0,
+            Some(i) => i + 1,
+        };
+
+        if next >= self.index.blocks.len() {
+            return Ok(false);
+        }
+
+        self.current_block = Some(next);
+
+        self.load_current_block()
+    }
+
     pub fn next(
         &mut self,
-    ) -> Result<Option<(String, Value)>> {
+    ) -> Result<Option<BlockRecord>> {
 
         loop {
 
-            if self.record_pos < self.block_records.len() {
+            if self.current_record < self.block_records.len() {
 
                 let record =
-                    self.block_records[self.record_pos]
+                    self.block_records[self.current_record]
                         .clone();
 
-                self.record_pos += 1;
+                self.current_record += 1;
 
                 return Ok(Some(record));
             }
 
-            if !self.load_current_block()? {
+            if !self.load_next_block()? {
                 return Ok(None);
             }
-
-            self.current_block += 1;
         }
+    }
+
+    pub fn seek(
+        &mut self,
+        key: &str,
+    ) -> Result<()> {
+
+        match find_block_index(&self.index, key) {
+
+            Some(block_index) => {
+
+                self.current_block = Some(block_index);
+
+                self.load_current_block()?;
+
+                self.current_record = self
+                    .block_records
+                    .iter()
+                    .position(|record| record.key.as_str() >= key)
+                    .unwrap_or(self.block_records.len());
+            }
+
+            None => {
+
+                self.current_block = None;
+
+                self.block_records.clear();
+
+                self.current_record = 0;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -238,14 +294,37 @@ fn serialize_record(key: &str, value: &Value) -> Vec<u8> {
     record
 }
 
+fn verify_header(file: &mut File) -> Result<()> {
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)?;
+
+    if &magic != MAGIC {
+        return Err("Invalid SSTable magic".into());
+    }
+
+    let mut version = [0u8; 4];
+    file.read_exact(&mut version)?;
+
+    let version = u32::from_be_bytes(version);
+
+    if version != FORMAT_VERSION {
+        return Err(format!(
+            "Unsupported SSTable version {}",
+            version
+        ).into());
+    }
+
+    Ok(())
+}
+
 pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableIndex> {
-    const HEADER_SIZE: u64 = 12;
+    const BLOCK_HEADER_SIZE: u64 = 12;
     // compressed_len (4)
     // original_len (4)
     // crc32 (4)
 
     let mut offsets = BTreeMap::new();
-    let mut file_offset = 0u64;
+    let mut file_offset = HEADER_SIZE;
 
     let mut current_block_offsets = BTreeMap::new();
 
@@ -258,6 +337,9 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
     let mut file = File::create(path)?;
 
     let mut is_new_block = true;
+
+    file.write_all(MAGIC)?;
+    file.write_all(&FORMAT_VERSION.to_be_bytes())?;
 
     for (key, val) in data {
         let mut record = serialize_record(key, val);
@@ -277,7 +359,7 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
             file.write_all(&checksum.to_be_bytes())?;
             file.write_all(&compressed)?;
 
-            file_offset += HEADER_SIZE + compressed.len() as u64;
+            file_offset += BLOCK_HEADER_SIZE + compressed.len() as u64;
 
             if let Some(last_block) = blocks.last_mut() {
                 last_block.record_offset = current_block_offsets.clone();
@@ -299,7 +381,7 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
             is_new_block = false;
         }
 
-        let record_offset = HEADER_SIZE + file_offset + single_block.len() as u64;
+        let record_offset = BLOCK_HEADER_SIZE + file_offset + single_block.len() as u64;
 
         current_block_offsets.insert(key.clone(), record_offset);
 
@@ -373,6 +455,8 @@ pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableInde
 
 pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
     let mut file = File::open(path)?;
+
+    verify_header(&mut file)?;
 
     // Read the footer to find where data blocks end (at index_offset)
     let footer = read_footer(path)?;
@@ -538,12 +622,16 @@ pub fn search_sstable(
     Ok(None)
 }
 
-pub fn find_block<'a>(index: &'a SSTableIndex, key: &str) -> Option<&'a BlockMeta> {
+pub fn find_block_index(
+    index: &SSTableIndex,
+    key: &str,
+) -> Option<usize> {
+
     let mut candidate = None;
 
-    for block in &index.blocks {
+    for (i, block) in index.blocks.iter().enumerate() {
         if key >= block.start_key.as_str() {
-            candidate = Some(block);
+            candidate = Some(i);
         } else {
             break;
         }
@@ -552,10 +640,21 @@ pub fn find_block<'a>(index: &'a SSTableIndex, key: &str) -> Option<&'a BlockMet
     candidate
 }
 
+pub fn find_block<'a>(
+    index: &'a SSTableIndex,
+    key: &str,
+) -> Option<&'a BlockMeta> {
+
+    let block_index = find_block_index(index, key)?;
+
+    index.blocks.get(block_index)
+}
+
 
 pub fn read_block(path: &str, offset: u64) -> Result<Vec<BlockRecord>> {
     let mut file = File::open(path)?;
 
+    verify_header(&mut file)?;
     read_block_from_file(&mut file, offset)
 }
 
@@ -771,6 +870,8 @@ pub fn deserialize_index(bytes: &[u8]) -> SSTableIndex {
 pub fn read_footer(path: &str) -> Result<FooterMetadata> {
     let mut file = File::open(path)?;
 
+    verify_header(&mut file)?;
+
     let file_size = file.metadata()?.len();
 
     file.seek(SeekFrom::Start(file_size - 8))?;
@@ -795,6 +896,7 @@ pub fn load_index_from_footer(path: &str) -> Result<SSTableIndex> {
 
     let mut file = File::open(path)?;
 
+
     file.seek(SeekFrom::Start(footer.index_offset))?;
 
     let mut bytes = vec![0u8; footer.index_size as usize];
@@ -808,6 +910,7 @@ pub fn load_bloom_from_footer(path: &str) -> Result<BloomFilter> {
     let footer = read_footer(path)?;
 
     let mut file = File::open(path)?;
+
 
     file.seek(SeekFrom::Start(footer.bloom_offset))?;
 

@@ -2,7 +2,7 @@ use std::fs;
 
 use arch_db::engine::Value;
 use arch_db::helper::unique_file;
-use arch_db::sstable::{find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
+use arch_db::sstable::{SSTableIterator, find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
 
 fn sample_data() -> Vec<(String, Value)> {
     vec![
@@ -300,4 +300,43 @@ fn test_load_bloom_from_footer() {
 
     std::fs::remove_file(file)
         .unwrap();
+}
+
+#[test]
+fn test_sstable_iterator() {
+    let path = "iterator_test.bin";
+
+    let mut data = Vec::new();
+
+    for i in 0..20 {
+        data.push((
+            format!("key{:02}", i),
+            Value::Data(format!("value{}", i)),
+        ));
+    }
+
+    let index = write_sstable(path, &data).unwrap();
+
+    let mut iter = SSTableIterator::new(path, index).unwrap();
+
+    let mut result = Vec::new();
+
+    while let Some(record) = iter.next().unwrap() {
+        result.push(record);
+    }
+
+    assert_eq!(result.len(), data.len());
+
+    for i in 0..20 {
+        assert_eq!(result[i].key, format!("key{:02}", i));
+
+        match &result[i].value {
+            Value::Data(v) => {
+                assert_eq!(v, &format!("value{}", i));
+            }
+            _ => panic!("Unexpected tombstone"),
+        }
+    }
+
+    fs::remove_file(path).unwrap();
 }

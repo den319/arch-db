@@ -718,6 +718,7 @@ impl Manifest {
         }
 
         let file= File::open(&self.log_path)?;
+        
 
         let reader= BufReader::new(file);
 

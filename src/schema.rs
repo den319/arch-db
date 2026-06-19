@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fs::File, io::{Write}};
 
+use crate::error::Result;
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnType {
@@ -34,14 +36,16 @@ impl Catalog {
         }
     }
 
-    pub fn create_table(&mut self, table: Table) -> Result<(), String> {
+    pub fn create_table(&mut self, table: Table) -> crate::error::Result<()> {
         if self.tables.contains_key(&table.name) {
-            return Err(format!("Table '{}' already exists!", table.name));
+            return Err(crate::error::DatabaseError::Io(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("Table '{}' already exists!", table.name))
+            ));
         }
 
         self.tables.insert(table.name.clone(), table);
 
-        self.save().map_err(|e| e.to_string())?;
+        self.save()?;
 
         Ok(())
     }
