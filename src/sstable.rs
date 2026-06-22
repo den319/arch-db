@@ -42,6 +42,19 @@ pub struct SSTableIterator {
     current_block: Option<usize>,
     block_records: Vec<BlockRecord>,
     current_record: usize,
+    
+}
+
+pub struct SSTableWriter {
+    file: File,
+    offsets: BTreeMap<String, u64>,
+    file_offset: u64,
+    current_block_offsets: BTreeMap<String, u64>,
+    block_size: usize,
+    single_block: Vec<u8>,
+    blocks: Vec<BlockMeta>,
+    is_new_block: bool,
+    bloom: BloomFilter,
 }
 
 pub const BLOCK_SIZE: usize = 40;
@@ -56,6 +69,170 @@ impl SSTable {
 
     pub fn contains_key_range(&self, key: &str) -> bool {
         key >= self.min_key.as_str() && key <= self.max_key.as_str()
+    }
+}
+
+impl SSTableWriter {
+    pub fn new(
+        path: &str,
+        expected_records: usize,
+    ) -> Result<Self> {
+
+        let mut file = File::create(path)?;
+
+        file.write_all(MAGIC)?;
+        file.write_all(&FORMAT_VERSION.to_be_bytes())?;
+
+        Ok(Self {
+            file,
+
+            offsets: BTreeMap::new(),
+            file_offset: HEADER_SIZE,
+
+            current_block_offsets: BTreeMap::new(),
+
+            block_size: 0,
+            single_block: Vec::new(),
+
+            blocks: Vec::new(),
+
+            is_new_block: true,
+
+            bloom: BloomFilter::with_rate(
+                0.01,
+                expected_records.max(1) as u32,
+            ),
+        })
+    }
+
+    pub fn append(
+        &mut self,
+        key: String,
+        value: Value,
+    ) -> Result<()> {
+
+        const BLOCK_HEADER_SIZE: u64 = 12;
+
+        let record = serialize_record(&key, &value);
+
+        if self.block_size + record.len() > BLOCK_SIZE {
+
+            let written =
+                write_block(
+                    &mut self.file,
+                    &self.single_block,
+                )?;
+
+            self.file_offset += written;
+
+            if let Some(last_block) = self.blocks.last_mut() {
+
+                last_block.record_offset =
+                    std::mem::take(
+                        &mut self.current_block_offsets
+                    );
+            }
+
+            self.single_block.clear();
+            self.block_size = 0;
+
+            self.is_new_block = true;
+        }
+
+        if self.is_new_block {
+
+            self.blocks.push(BlockMeta {
+                start_key: key.clone(),
+                offset: self.file_offset,
+                record_offset: BTreeMap::new(),
+            });
+
+            self.is_new_block = false;
+        }
+
+        let record_offset =
+            self.file_offset
+            + BLOCK_HEADER_SIZE
+            + self.single_block.len() as u64;
+
+        self.current_block_offsets
+            .insert(key.clone(), record_offset);
+
+        self.offsets
+            .insert(key.clone(), record_offset);
+
+        self.bloom.insert(&key);
+
+        self.single_block.extend(&record);
+
+        self.block_size += record.len();
+
+        Ok(())
+    }
+
+    pub fn finish(&mut self)-> Result<SSTableIndex> {
+        if !self.single_block.is_empty() {
+            if let Some(last_block) = self.blocks.last_mut() {
+                last_block.record_offset =
+                    std::mem::take(
+                        &mut self.current_block_offsets,
+                    );
+            }
+
+            write_block(
+                &mut self.file,
+                &self.single_block,
+            )?;
+        }
+
+        self.blocks.sort_by(|a, b| {
+            a.start_key.cmp(&b.start_key)
+        });
+
+        let index = SSTableIndex {
+            offsets: self.offsets.clone(),
+            blocks: self.blocks.clone(),
+        };
+
+        let serialized_index =
+            serialize_index(&index);
+
+        let index_offset =
+            self.file.seek(
+                SeekFrom::Current(0)
+            )?;
+
+        self.file.write_all(&serialized_index)?;
+
+        let serialized_bloom =
+            serialize_bloom(&self.bloom);
+
+        let bloom_offset =
+            self.file.seek(
+                SeekFrom::Current(0)
+            )?;
+
+        self.file.write_all(&serialized_bloom)?;
+
+        let footer = FooterMetadata {
+            index_offset,
+            index_size: serialized_index.len() as u64,
+
+            bloom_offset,
+            bloom_size: serialized_bloom.len() as u64,
+        };
+
+        let footer_bytes =
+            footer.serialize();
+
+        self.file.write_all(&footer_bytes)?;
+
+        self.file.write_all(
+            &(footer_bytes.len() as u64)
+                .to_le_bytes(),
+        )?;
+
+        Ok(index)
     }
 }
 
@@ -299,7 +476,7 @@ fn verify_header(file: &mut File) -> Result<()> {
     file.read_exact(&mut magic)?;
 
     if &magic != MAGIC {
-        return Err("Invalid SSTable magic".into());
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SSTable magic").into());
     }
 
     let mut version = [0u8; 4];
@@ -308,151 +485,51 @@ fn verify_header(file: &mut File) -> Result<()> {
     let version = u32::from_be_bytes(version);
 
     if version != FORMAT_VERSION {
-        return Err(format!(
-            "Unsupported SSTable version {}",
-            version
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Unsupported SSTable version {}", version),
         ).into());
     }
 
     Ok(())
 }
 
-pub fn write_sstable(path: &str, data: &[(String, Value)]) -> Result<SSTableIndex> {
+fn write_block(
+    file: &mut File,
+    block: &[u8],
+) -> Result<u64> {
     const BLOCK_HEADER_SIZE: u64 = 12;
-    // compressed_len (4)
-    // original_len (4)
-    // crc32 (4)
 
-    let mut offsets = BTreeMap::new();
-    let mut file_offset = HEADER_SIZE;
+    let compressed = Encoder::new()
+        .compress_vec(block)
+        .expect("compression failed");
 
-    let mut current_block_offsets = BTreeMap::new();
+    let compressed_len = compressed.len() as u32;
+    let original_len = block.len() as u32;
 
-    let mut block_size = 0usize;
+    let checksum = hash(&compressed);
 
-    let mut single_block = Vec::new();
+    file.write_all(&compressed_len.to_be_bytes())?;
+    file.write_all(&original_len.to_be_bytes())?;
+    file.write_all(&checksum.to_be_bytes())?;
+    file.write_all(&compressed)?;
 
-    let mut blocks: Vec<BlockMeta> = Vec::new();
-
-    let mut file = File::create(path)?;
-
-    let mut is_new_block = true;
-
-    file.write_all(MAGIC)?;
-    file.write_all(&FORMAT_VERSION.to_be_bytes())?;
-
-    for (key, val) in data {
-        let mut record = serialize_record(key, val);
-
-        if block_size + record.len() > BLOCK_SIZE {
-            let compressed = Encoder::new()
-                .compress_vec(&single_block)
-                .expect("compression failed");
-
-            let compressed_len = compressed.len() as u32;
-            let original_len = single_block.len() as u32;
-
-            let checksum = hash(&compressed);
-
-            file.write_all(&compressed_len.to_be_bytes())?;
-            file.write_all(&original_len.to_be_bytes())?;
-            file.write_all(&checksum.to_be_bytes())?;
-            file.write_all(&compressed)?;
-
-            file_offset += BLOCK_HEADER_SIZE + compressed.len() as u64;
-
-            if let Some(last_block) = blocks.last_mut() {
-                last_block.record_offset = current_block_offsets.clone();
-            }
-
-            current_block_offsets.clear();
-            single_block.clear();
-            block_size = 0;
-
-            is_new_block = true;
-        }
-
-        if is_new_block {
-            blocks.push(BlockMeta {
-                start_key: key.clone(),
-                offset: file_offset,
-                record_offset: BTreeMap::new(),
-            });
-            is_new_block = false;
-        }
-
-        let record_offset = BLOCK_HEADER_SIZE + file_offset + single_block.len() as u64;
-
-        current_block_offsets.insert(key.clone(), record_offset);
-
-        single_block.extend(&record);
-        block_size += record.len();
-
-        offsets.insert(key.clone(), record_offset);
-    }
-
-    if !single_block.is_empty() {
-        if let Some(last_block) = blocks.last_mut() {
-            last_block.record_offset = current_block_offsets.clone();
-        }
-
-        let compressed = Encoder::new()
-            .compress_vec(&single_block)
-            .expect("compression failed");
-
-        let compressed_len = compressed.len() as u32;
-        let original_len = single_block.len() as u32;
-
-        let checksum = hash(&compressed);
-
-        file.write_all(&compressed_len.to_be_bytes())?;
-        file.write_all(&original_len.to_be_bytes())?;
-        file.write_all(&checksum.to_be_bytes())?;
-        file.write_all(&compressed)?;
-    }
-
-    blocks.sort_by(|a, b| a.start_key.cmp(&b.start_key));
-
-    let index = SSTableIndex {
-        offsets: offsets.clone(),
-        blocks: blocks.clone(),
-    };
-
-    let serialized_index = serialize_index(&index);
-
-    let index_offset = file.seek(SeekFrom::Current(0))?;
-
-    file.write_all(&serialized_index)?;
-
-    let mut bloom = BloomFilter::with_rate(0.01, data.len().max(1) as u32);
-
-    for (key, _) in data {
-        bloom.insert(key);
-    }
-
-    let serialized_bloom = serialize_bloom(&bloom);
-
-    let bloom_offset = file.seek(SeekFrom::Current(0))?;
-
-    file.write_all(&serialized_bloom)?;
-
-    let footer = FooterMetadata {
-        index_offset,
-        index_size: serialized_index.len() as u64,
-
-        bloom_offset,
-        bloom_size: serialized_bloom.len() as u64,
-    };
-
-    let footer_bytes = footer.serialize();
-
-    file.write_all(&footer_bytes)?;
-
-    file.write_all(&(footer_bytes.len() as u64).to_le_bytes())?;
-
-    Ok(index)
+    Ok(BLOCK_HEADER_SIZE + compressed.len() as u64)
 }
 
+pub fn write_sstable(
+    path: &str,
+    data: &[(String, Value)],
+) -> Result<SSTableIndex> {
+    let mut writer =
+        SSTableWriter::new(path, data.len())?;
+
+    for (key, value) in data {
+        writer.append(key.clone(), value.clone())?;
+    }
+
+    writer.finish()
+}
 pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
     let mut file = File::open(path)?;
 

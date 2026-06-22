@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, sync::atomic::{AtomicU64, Ordering}};
 
-use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable::{SSTableIndex, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
+use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable::{SSTableIndex, SSTableIterator, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -237,18 +237,6 @@ impl SSTableManager {
         vec![]
     }
 
-    pub fn load_table(&self, table: &SSTable) -> Result<BTreeMap<String, Value>> {
-        let data= read_sstable(&table.path)?;
-
-        let mut result= BTreeMap::new();
-
-        for (k,v) in data {
-            result.insert(k, v);
-        }
-
-        Ok(result)
-    }
-
     pub fn get(&self, key:&str) -> Result<Option<Value>> {
         for table in self.l0.iter().rev() {
             if !table.bloom.contains(&key) {
@@ -369,17 +357,10 @@ impl SSTableManager {
         let mut merged= BTreeMap::<String, Value>::new();
 
         for table in &self.l0 {
-            let data= read_sstable(&table.path)?;
+            let mut data= SSTableIterator::new(&table.path, table.index.clone())?;
 
-            for (k,v) in data {
-                match v {
-                    Value::Data(val) => {
-                        merged.insert(k, Value::Data(val));
-                    }
-                    Value::Tombstone => {
-                        merged.insert(k, Value::Tombstone);
-                    }
-                }
+            while let Some(record) = data.next()? {
+                merged.insert(record.key, record.value);
             }
         }
 
@@ -447,17 +428,19 @@ impl SSTableManager {
         for idx in &overlapping_indices {
             let table= &self.l2[*idx];
 
-            let data= self.load_table(table)?;
+            let mut data= SSTableIterator::new(&table.path, table.index.clone())?;
 
-            for (k,v) in data {
-                merged.insert(k,v);
+            while let Some(record)= data.next()? {
+                merged.insert(record.key, record.value);
             }
         }
 
-        let l1_data= self.load_table(&self.l1[0])?;
+        let table= &self.l1[0];
 
-        for (k,v) in l1_data {
-            merged.insert(k, v);
+        let mut iter= SSTableIterator::new(&table.path, table.index.clone())?;
+
+        while let Some(record)= iter.next()? {
+            merged.insert(record.key, record.value);
         }
 
         let sorted: Vec<(String, Value)>= merged.into_iter().collect();
@@ -521,10 +504,10 @@ impl SSTableManager {
         for idx in &indexed_candidates {
             let table = &self.l0[*idx];
 
-            let data = read_sstable(&table.path)?;
-
-            for (k, v) in data {
-                merged.insert(k, v);
+            let mut data = SSTableIterator::new(&table.path, table.index.clone())?;
+            
+            while let Some(record)= data.next()? {
+                merged.insert(record.key, record.value);
             }
         }
 

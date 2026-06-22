@@ -2,7 +2,8 @@ use std::fs;
 
 use arch_db::engine::Value;
 use arch_db::helper::unique_file;
-use arch_db::sstable::{SSTableIterator, find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
+use arch_db::sstable::{SSTableIterator, SSTableWriter, find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
+use arch_db::sstable_manager::SSTable;
 
 fn sample_data() -> Vec<(String, Value)> {
     vec![
@@ -139,7 +140,6 @@ fn test_detect_corrupted_sstable_block() {
     ).unwrap();
 
     // Corrupt file bytes
-
     {
         let mut file =
             std::fs::OpenOptions::new()
@@ -147,8 +147,10 @@ fn test_detect_corrupted_sstable_block() {
                 .open(path)
                 .unwrap();
 
+        // Corrupt somewhere in the first block's compressed data (past the 8-byte file header
+        // and 12-byte block header = offset 20)
         file.seek(
-            SeekFrom::Start(10)
+            SeekFrom::Start(25)
         ).unwrap();
 
         file.write_all(
@@ -156,8 +158,9 @@ fn test_detect_corrupted_sstable_block() {
         ).unwrap();
     }
 
+    // Read first block — the block is at offset 8 (HEADER_SIZE) past the file header
     let result =
-        read_block(path, 0)
+        read_block(path, 8)
             .unwrap();
 
     assert!(
@@ -339,4 +342,255 @@ fn test_sstable_iterator() {
     }
 
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_seek_existing_key() {
+    let path = "seek_existing.bin";
+
+    let mut data = Vec::new();
+    for i in 0..20 {
+        data.push((
+            format!("key{:02}", i),
+            Value::Data(format!("value{}", i)),
+        ));
+    }
+
+    let index = write_sstable(path, &data).unwrap();
+
+    let mut iter = SSTableIterator::new(path, index).unwrap();
+
+    // Seek to an existing key
+    iter.seek("key10").unwrap();
+    let record = iter.next().unwrap().expect("expected a record after seek");
+    assert_eq!(record.key, "key10");
+    match record.value {
+        Value::Data(v) => assert_eq!(v, "value10"),
+        _ => panic!("Expected Data"),
+    }
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_seek_non_existent_key() {
+    let path = "seek_nonexistent.bin";
+
+    let mut data = Vec::new();
+    for i in 0..20 {
+        data.push((
+            format!("key{:02}", i),
+            Value::Data(format!("value{}", i)),
+        ));
+    }
+
+    let index = write_sstable(path, &data).unwrap();
+
+    let mut iter = SSTableIterator::new(path, index).unwrap();
+
+    // Seek to a key that does not exist, but falls between existing keys
+    iter.seek("key10a").unwrap();
+    let record = iter.next().unwrap().expect("expected a record after seek");
+    assert_eq!(record.key, "key11");
+    match record.value {
+        Value::Data(v) => assert_eq!(v, "value11"),
+        _ => panic!("Expected Data"),
+    }
+
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_sstable_writer_single_record() -> Result<()> {
+    let path = "test_single_writer.sst";
+
+    let mut writer = SSTableWriter::new(path, 1)?;
+
+    writer.append(
+        "apple".to_string(),
+        Value::Data("100".to_string()),
+    )?;
+
+    writer.finish()?;
+
+    let table = load_from_file(path)?;
+
+    assert_eq!(
+        search_sstable(&table, "apple")?,
+        Some(Value::Data("100".to_string()))
+    );
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_sstable_writer_multiple_records() -> Result<()> {
+    let path = "test_multiple_writer.sst";
+
+    let mut writer = SSTableWriter::new(path, 10)?;
+
+    for i in 0..10 {
+        writer.append(
+            format!("key{:02}", i),
+            Value::Data(format!("value{}", i)),
+        )?;
+    }
+
+    writer.finish()?;
+
+    let table = SSTable::load_from_file(path)?;
+
+    for i in 0..10 {
+        assert_eq!(
+            search_sstable(&table, &format!("key{:02}", i))?,
+            Some(Value::Data(format!("value{}", i)))
+        );
+    }
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_sstable_writer_multiple_blocks() -> Result<()> {
+    let path = "test_blocks_writer.sst";
+
+    let mut writer = SSTableWriter::new(path, 500);
+
+    for i in 0..500 {
+        writer.append(
+            format!("key{:04}", i),
+            Value::Data("abcdefghijklmnopqrstuvwxyz".repeat(4)),
+        )?;
+    }
+
+    let index = writer.finish()?;
+
+    assert!(index.blocks.len() > 1);
+
+    let table = SSTable::load_from_file(path)?;
+
+    for i in [0, 50, 100, 200, 300, 499] {
+        assert_eq!(
+            search_sstable(&table, &format!("key{:04}", i))?,
+            Some(Value::Data("abcdefghijklmnopqrstuvwxyz".repeat(4)))
+        );
+    }
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_sstable_writer_empty() -> Result<()> {
+    let path = "test_empty_writer.sst";
+
+    let writer = SSTableWriter::new(path, 1)?;
+
+    let index = writer.finish()?;
+
+    assert!(index.offsets.is_empty());
+    assert!(index.blocks.is_empty());
+
+    let table = SSTable::load_from_file(path)?;
+
+    assert!(search_sstable(&table, "anything")?.is_none());
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_sstable_writer_tombstones() -> Result<()> {
+    let path = "test_tombstone_writer.sst";
+
+    let mut writer = SSTableWriter::new(path, 3)?;
+
+    writer.append(
+        "apple".into(),
+        Value::Data("10".into()),
+    )?;
+
+    writer.append(
+        "banana".into(),
+        Value::Tombstone,
+    )?;
+
+    writer.append(
+        "cat".into(),
+        Value::Data("30".into()),
+    )?;
+
+    writer.finish()?;
+
+    let table = SSTable::load_from_file(path)?;
+
+    assert_eq!(
+        search_sstable(&table, "banana")?,
+        Some(Value::Tombstone)
+    );
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_writer_matches_old_write_sstable() -> Result<()> {
+    let old_path = "old.sst";
+    let new_path = "new.sst";
+
+    let data = vec![
+        ("apple".to_string(), Value::Data("1".to_string())),
+        ("banana".to_string(), Value::Data("2".to_string())),
+        ("cat".to_string(), Value::Tombstone),
+        ("dog".to_string(), Value::Data("4".to_string())),
+    ];
+
+    let old_index = write_sstable(old_path, &data)?;
+
+    let mut writer = SSTableWriter::new(new_path, data.len())?;
+
+    for (k, v) in &data {
+        writer.append(k.clone(), v.clone())?;
+    }
+
+    let new_index = writer.finish()?;
+
+    assert_eq!(old_index.offsets, new_index.offsets);
+    assert_eq!(old_index.blocks.len(), new_index.blocks.len());
+
+    let old_table = SSTable::load_from_file(old_path)?;
+    let new_table = SSTable::load_from_file(new_path)?;
+
+    for (key, value) in &data {
+        assert_eq!(search_sstable(&old_table, key)?, Some(value.clone()));
+        assert_eq!(search_sstable(&new_table, key)?, Some(value.clone()));
+    }
+
+    std::fs::remove_file(old_path)?;
+    std::fs::remove_file(new_path)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_finish_without_append() -> Result<()> {
+    let path = "empty_finish.sst";
+
+    let writer = SSTableWriter::new(path, 10)?;
+
+    let index = writer.finish()?;
+
+    assert!(index.blocks.is_empty());
+    assert!(index.offsets.is_empty());
+
+    std::fs::remove_file(path)?;
+
+    Ok(())
 }
