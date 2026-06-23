@@ -61,6 +61,7 @@ pub const BLOCK_SIZE: usize = 40;
 const MAGIC: &[u8; 4] = b"ARCH";
 const FORMAT_VERSION: u32 = 1;
 const HEADER_SIZE: u64 = 8;
+const TARGET_RECORDS_PER_TABLE: usize = 3;
 
 impl SSTable {
     pub fn overlaps(&self, min_key: &str, max_key: &str) -> bool {

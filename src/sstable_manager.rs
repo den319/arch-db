@@ -62,6 +62,19 @@ pub struct Manifest {
     operations: usize,
 }
 
+#[derive(Debug)]
+pub struct CreatedTable {
+    pub path: String,
+
+    pub index: SSTableIndex,
+    pub bloom: BloomFilter,
+
+    pub min_key: String,
+    pub max_key: String,
+
+    pub file_size: u64,
+}
+
 
 static SSTABLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -69,6 +82,9 @@ const L1_COMPACTION_THRESHOLD: usize = 4;
 const SIZE_TIERED_MIN_TABLES: usize = 3;
 const SIZE_TIERED_SIZE_RATIO: f64 = 1.5;
 const MANIFEST_CHECKPOINT_INTERVAL: usize = 10;
+// const TARGET_TABLE_SIZE: usize = 4 * 1024 * 1024;
+const TARGET_TABLE_SIZE: usize = 200;
+
 
 pub fn init_sstable_counter() {
     let mut max_id = 0u64;
@@ -279,13 +295,37 @@ impl SSTableManager {
         Ok(None)
     }
 
+    fn finalize_writer(
+        &self,
+        mut writer: SSTableWriter,
+        path: String,
+        min_key: String,
+        max_key: String,
+    ) -> Result<CreatedTable> {
+
+        let index = writer.finish()?;
+
+        let bloom = load_bloom_from_footer(&path)?;
+
+        let file_size = fs::metadata(&path)?.len();
+
+        Ok(CreatedTable {
+            path,
+            index,
+            bloom,
+            min_key,
+            max_key,
+            file_size,
+        })
+    }
+
     fn write_merged_tables(
         &self,
         tables: &[&SSTable],
         output_path: &str,
         output_level: Level,
         drop_tombstones: bool,
-    ) -> Result<(SSTableIndex, BloomFilter, String, String, u64)> {
+    ) -> Result<Vec<CreatedTable>> {
         let mut iters = Vec::new();
 
         for table in tables {
@@ -308,42 +348,91 @@ impl SSTableManager {
             .map(|t| t.index.offsets.len())
             .sum();
 
-        let mut writer =
-            SSTableWriter::new(
-                output_path,
-                estimated_records,
-            )?;
+        let mut created_tables = Vec::new();
 
-        let mut min_key = None;
-        let mut max_key = None;
+        let mut current_path = format!(
+            "sst_{:?}_{}.bin",
+            output_level,
+            next_sstable_id(),
+        ).to_lowercase();
+
+        let mut writer = SSTableWriter::new(
+            &current_path,
+            TARGET_TABLE_SIZE,
+        )?;
+
+        let mut current_min_key: Option<String> = None;
+        let mut current_max_key: Option<String> = None;
+
+        let mut estimated_size = 0usize;
 
         while let Some(record) = merge.next()? {
 
-            if min_key.is_none() {
-                min_key = Some(record.key.clone());
+            if current_min_key.is_none() {
+                current_min_key = Some(record.key.clone());
             }
 
-            max_key = Some(record.key.clone());
+            current_max_key = Some(record.key.clone());
+
+            let record_size = match &record.value {
+                Value::Data(v) => {
+                    record.key.len()
+                        + v.len()
+                        + 32 // overhead approximation
+                }
+                Value::Tombstone => {
+                    record.key.len()
+                        + 16
+                }
+            };
 
             writer.append(
                 record.key,
                 record.value,
             )?;
+
+            estimated_size += record_size;
+
+            if estimated_size >= TARGET_TABLE_SIZE {
+
+                let table = self.finalize_writer(
+                    writer,
+                    current_path.clone(),
+                    current_min_key.take().unwrap(),
+                    current_max_key.take().unwrap(),
+                )?;
+
+                created_tables.push(table);
+
+                current_path = format!(
+                    "sst_{:?}_{}.bin",
+                    output_level,
+                    next_sstable_id(),
+                )
+                .to_lowercase();
+
+                writer = SSTableWriter::new(
+                    &current_path,
+                    TARGET_TABLE_SIZE,
+                )?;
+
+                estimated_size = 0;
+            }
         }
 
-        let index = writer.finish()?;
+        if estimated_size > 0 {
 
-        let bloom = load_bloom_from_footer(output_path)?;
+            let table = self.finalize_writer(
+                writer,
+                current_path,
+                current_min_key.unwrap(),
+                current_max_key.unwrap(),
+            )?;
 
-        let file_size = fs::metadata(output_path)?.len();
+            created_tables.push(table);
+        }
 
-        Ok((
-            index,
-            bloom,
-            min_key.unwrap_or_default(),
-            max_key.unwrap_or_default(),
-            file_size,
-        ))
+        Ok(created_tables)
     }
 
     fn all_tables(&self) -> impl Iterator<Item = &SSTable> {
@@ -433,43 +522,28 @@ impl SSTableManager {
 
         println!("Found {} overlapping tables",overlapping_indices.len());
 
-        let mut merged= BTreeMap::new();
+        let mut tables: Vec<&SSTable> = Vec::new();
 
+        // Older L2 tables first
         for idx in &overlapping_indices {
-            let table= &self.l2[*idx];
-
-            let mut data= SSTableIterator::new(&table.path, table.index.clone())?;
-
-            while let Some(record)= data.next()? {
-                merged.insert(record.key, record.value);
-            }
+            tables.push(&self.l2[*idx]);
         }
 
-        let table= &self.l1[0];
+        // Newer L1 table last
+        tables.push(&self.l1[0]);
 
-        let mut iter= SSTableIterator::new(&table.path, table.index.clone())?;
+        let path = format!(
+            "sst_l2_{}.bin",
+            next_sstable_id()
+        );
 
-        while let Some(record)= iter.next()? {
-            merged.insert(record.key, record.value);
-        }
+        let created_tables = self.write_merged_tables(
+            &tables,
+            &path,
+            Level::L2,
+            true,
+        )?;
 
-        let sorted: Vec<(String, Value)>= merged.into_iter().collect();
-
-        let mut bloom= BloomFilter::with_rate(0.01, sorted.len().max(8) as u32);
-
-        for (k,_) in &sorted {
-            bloom.insert(k);
-        }
-
-        let min_key= sorted.first().map(|(k,_)| k.clone()).unwrap();
-
-        let max_key= sorted.last().map(|(k,_)| k.clone()).unwrap();
-
-        let path= format!("sst_l2_{}.bin", next_sstable_id());
-
-        let index= write_sstable(&path, &sorted)?;
-
-        let file_size= fs::metadata(&path)?.len();
 
         for idx in overlapping_indices.iter().rev() {
             let table= self.l2.remove(*idx);
@@ -483,15 +557,18 @@ impl SSTableManager {
 
         self.l1.remove(0);
 
-        self.install_table(
-            Level::L2,
-            path,
-            index,
-            bloom,
-            min_key,
-            max_key,
-            file_size,
-        )?;
+        for table in created_tables {
+            self.install_table(
+                Level::L2,
+                table.path,
+                table.index,
+                table.bloom,
+                table.min_key,
+                table.max_key,
+                table.file_size,
+            )?;
+
+        }
 
         self.checkpoint_manifest()?;
 
@@ -508,28 +585,25 @@ impl SSTableManager {
         let mut indexed_candidates = candidates.clone();
         indexed_candidates.sort();
 
+        // L0: higher index = newer data. Reverse so newer values overwrite older ones.
         let tables: Vec<&SSTable> = indexed_candidates
             .iter()
             .map(|idx| &self.l0[*idx])
             .collect();
+        // tables.reverse();
 
         let path = format!(
             "sst_l1_{}.bin",
             next_sstable_id()
         );
 
-        let (
-            index,
-            bloom,
-            min_key,
-            max_key,
-            file_size,
-        ) = self.write_merged_tables(
+        let created_tables= self.write_merged_tables(
             &tables,
             &path,
             Level::L1,
             false,
         )?;
+
 
         // Remove candidates in descending index order so that
         // removing one doesn't shift the indices of remaining candidates.
@@ -542,15 +616,18 @@ impl SSTableManager {
             fs::remove_file(old.path)?;
         }
 
-        self.install_table(
-            Level::L1,
-            path,
-            index,
-            bloom,
-            min_key,
-            max_key,
-            file_size,
-        )?;
+        for table in created_tables {
+            self.install_table(
+                Level::L1,
+                table.path,
+                table.index,
+                table.bloom,
+                table.min_key,
+                table.max_key,
+                table.file_size,
+            )?;
+
+        }
 
         Ok(())
     }

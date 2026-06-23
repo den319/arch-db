@@ -4,7 +4,7 @@ use std::fs;
 use arch_db::bloom_filter::BloomFilter;
 use arch_db::command::Command;
 use arch_db::engine::{Engine, Value};
-use arch_db::sstable::{SSTableIndex, load_index_from_footer, search_sstable, write_sstable};
+use arch_db::sstable::{SSTableIndex, load_index_from_footer, read_sstable, search_sstable, write_sstable};
 use arch_db::sstable_manager::{Level, Manifest, ManifestRecord, SSTable, SSTableManager};
 
 fn unique_file(prefix: &str, ext: &str) -> String {
@@ -247,6 +247,9 @@ fn test_tombstone_survives_compaction() {
     });
 
     manager.size_tiered_compact_l0().unwrap();
+
+    let data = read_sstable(&manager.l1[0].path).unwrap();
+        println!("{:#?}", data);
 
     let table = &manager.l1[0];
     let result = search_sstable(&table.path, &table.index, "user").unwrap();
@@ -955,4 +958,179 @@ fn test_manifest_log_truncated_after_checkpoint() {
 
     let _ = fs::remove_file(&log_path);
     let _ = fs::remove_file(&ckpt_path);
+}
+
+
+#[test]
+fn test_compaction_splits_output_into_multiple_tables() {
+    let mut manager = SSTableManager::new();
+
+    // Generate enough data to exceed TARGET_TABLE_SIZE.
+    let mut data = Vec::new();
+
+    for i in 0..100 {
+        data.push((
+            format!("key_{:03}", i),
+            Value::Data("x".repeat(50)),
+        ));
+    }
+
+    let file = unique_file("split_input", "bin");
+
+    let index = write_sstable(&file, &data).unwrap();
+
+    let mut bloom = BloomFilter::with_rate(0.01, data.len() as u32);
+
+    for (k, _) in &data {
+        bloom.insert(k);
+    }
+
+    let size = fs::metadata(&file).unwrap().len();
+
+    manager.l0.push(SSTable {
+        path: file,
+        index,
+        bloom,
+        level: Level::L0,
+        min_key: "key_000".into(),
+        max_key: "key_099".into(),
+        file_size: size,
+    });
+
+    manager.size_tiered_compact_l0().unwrap();
+
+    assert!(
+        manager.l1.len() > 1,
+        "Expected multiple SSTables after compaction"
+    );
+
+    for table in &manager.l1 {
+        let _ = fs::remove_file(&table.path);
+    }
+}
+
+
+#[test]
+fn test_compaction_split_tables_are_sorted() {
+    let manager = create_large_compacted_manager();
+
+    for table in &manager.l1 {
+
+        let data = read_sstable(&table.path).unwrap();
+
+        for window in data.windows(2) {
+            assert!(window[0].0 < window[1].0);
+        }
+    }
+
+    cleanup_manager(&manager);
+}
+
+
+#[test]
+fn test_split_tables_have_non_overlapping_key_ranges() {
+    let manager = create_large_compacted_manager();
+
+    for pair in manager.l1.windows(2) {
+
+        let left = &pair[0];
+        let right = &pair[1];
+
+        assert!(left.max_key < right.min_key);
+    }
+
+    cleanup_manager(&manager);
+}
+
+
+#[test]
+fn test_split_tables_preserve_all_records() {
+
+    let manager = create_large_compacted_manager();
+
+    let mut merged = Vec::new();
+
+    for table in &manager.l1 {
+        merged.extend(read_sstable(&table.path).unwrap());
+    }
+
+    for window in merged.windows(2) {
+        assert!(window[0].0 < window[1].0);
+    }
+
+    assert_eq!(merged.len(), 100);
+
+    cleanup_manager(&manager);
+}
+
+fn create_large_compacted_manager() -> SSTableManager {
+    let mut manager = SSTableManager::new();
+
+    // Generate enough data to exceed TARGET_TABLE_SIZE.
+    let mut data = Vec::new();
+
+    for i in 0..100 {
+        data.push((
+            format!("key_{:03}", i),
+            Value::Data("x".repeat(50)),
+        ));
+    }
+
+    let file = unique_file("split_input", "bin");
+
+    let index = write_sstable(&file, &data).unwrap();
+
+    let mut bloom = BloomFilter::with_rate(0.01, data.len() as u32);
+
+    for (k, _) in &data {
+        bloom.insert(k);
+    }
+
+    let size = fs::metadata(&file).unwrap().len();
+
+    manager.l0.push(SSTable {
+        path: file,
+        index,
+        bloom,
+        level: Level::L0,
+        min_key: "key_000".into(),
+        max_key: "key_099".into(),
+        file_size: size,
+    });
+
+    manager.size_tiered_compact_l0().unwrap();
+
+    assert!(
+        manager.l1.len() > 1,
+        "Expected multiple SSTables after compaction"
+    );
+
+    for table in &manager.l1 {
+        let _ = fs::remove_file(&table.path);
+    }
+
+    manager
+}
+
+fn cleanup_manager(manager: &SSTableManager) {
+    for table in manager
+        .l0
+        .iter()
+        .chain(manager.l1.iter())
+        .chain(manager.l2.iter())
+    {
+        let _ = fs::remove_file(&table.path);
+    }
+}
+
+#[test]
+fn test_no_empty_tables_created() {
+    let manager = create_large_compacted_manager();
+
+    for table in &manager.l1 {
+        let data = read_sstable(&table.path).unwrap();
+        assert!(!data.is_empty());
+    }
+
+    cleanup_manager(&manager);
 }

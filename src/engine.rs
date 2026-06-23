@@ -4,7 +4,7 @@ use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, error:
 use crate::cache::BlockCache;
 
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Value {
     Data(String),
     Tombstone,

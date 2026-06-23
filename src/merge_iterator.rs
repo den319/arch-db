@@ -8,31 +8,22 @@ pub struct MergeIterator {
     drop_tombstones: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeapItem {
     key: String,
     value: Value,
     iter_index: usize,
 }
 
-impl Eq for HeapItem {}
-
-impl PartialEq for HeapItem {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-    }
-}
-
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        match other.key.cmp(&self.key) {
-            Ordering::Equal => {
-                other.iter_index.cmp(&self.iter_index)
-            }
-            ord => ord,
-        }
+        other
+            .key
+            .cmp(&self.key)
+            .then_with(|| self.iter_index.cmp(&other.iter_index))
     }
 }
+
 impl PartialOrd for HeapItem {
     fn partial_cmp(
         &self,
@@ -48,6 +39,11 @@ impl MergeIterator {
 
         for(iter_index, iter) in iters.iter_mut().enumerate() {
             if let Some(record)= iter.next()? {
+                println!(
+                    "PUSH key={} iter={}",
+                    record.key,
+                    iter_index
+                );
                 heap.push(HeapItem { key: record.key, value: record.value, iter_index });
             }
         }
@@ -63,45 +59,62 @@ impl MergeIterator {
         &mut self,
     ) -> Result<Option<BlockRecord>> {
 
+        // Pop the winning record (newest version for the smallest key)
         let item = match self.heap.pop() {
             Some(item) => item,
             None => return Ok(None),
         };
 
-        let returned_key= item.key.clone();
+        // Save the key because we'll compare against duplicates.
+        let returned_key = item.key.clone();
 
-        if let Some(record)= self.iters[item.iter_index].next()? {
-            self.heap.push(HeapItem {
-                key: record.key,
-                value: record.value,
-                iter_index: item.iter_index,
-            });
-        }
-        while let  Some(top) = self.heap.peek() {
+        // ------------------------------------------------------
+        // Step 1: Remove every duplicate for this key.
+        // ------------------------------------------------------
+
+        while let Some(top) = self.heap.peek() {
             if top.key != returned_key {
                 break;
             }
-            let duplicate= self.heap.pop().unwrap();
 
+            let duplicate = self.heap.pop().unwrap();
+
+            // Advance the duplicate iterator.
             if let Some(record) = self.iters[duplicate.iter_index].next()? {
-    
                 self.heap.push(HeapItem {
                     key: record.key,
                     value: record.value,
                     iter_index: duplicate.iter_index,
                 });
             }
-            if self.drop_tombstones {
-                if let Value::Tombstone = item.value {
-                    continue;
-                }
+        }
+
+        // ------------------------------------------------------
+        // Step 2: Advance the winning iterator.
+        // ------------------------------------------------------
+
+        if let Some(record) = self.iters[item.iter_index].next()? {
+            self.heap.push(HeapItem {
+                key: record.key,
+                value: record.value,
+                iter_index: item.iter_index,
+            });
+        }
+
+        // ------------------------------------------------------
+        // Step 3: Optionally drop tombstones.
+        // ------------------------------------------------------
+
+        if self.drop_tombstones {
+            if let Value::Tombstone = item.value {
+                // Skip this key completely.
+                return self.next();
             }
-        } 
+        }
 
-
-        return Ok(Some(BlockRecord {
+        Ok(Some(BlockRecord {
             key: item.key,
             value: item.value,
-        }));
+        }))
     }
 }
