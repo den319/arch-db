@@ -91,11 +91,11 @@ impl MergeIterator {
                     iter_index: duplicate.iter_index,
                 });
             }
-            // if self.drop_tombstones {
-            //     if let Value::Tombstone = item.value {
-            //         continue;
-            //     }
-            // }
+            if self.drop_tombstones {
+                if let Value::Tombstone = item.value {
+                    continue;
+                }
+            }
         } 
 
 

@@ -9,6 +9,7 @@ mod helper;
 mod cache;
 mod bloom_filter;
 mod schema;
+mod merge_iterator;
 
 use std::{io::{self, Write}};
 

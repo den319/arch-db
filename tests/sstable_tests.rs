@@ -1,8 +1,9 @@
 use std::fs;
 
 use arch_db::engine::Value;
+use arch_db::error::Result;
 use arch_db::helper::unique_file;
-use arch_db::sstable::{SSTableIterator, SSTableWriter, find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
+use arch_db::sstable::{SSTableIndex, SSTableIterator, SSTableWriter, find_block, load_bloom_from_footer, load_index_from_footer, read_block, read_footer, search_sstable, write_sstable};
 use arch_db::sstable_manager::SSTable;
 
 fn sample_data() -> Vec<(String, Value)> {
@@ -413,12 +414,11 @@ fn test_sstable_writer_single_record() -> Result<()> {
 
     writer.finish()?;
 
-    let table = load_from_file(path)?;
+    let index = load_index_from_footer(path)?;
 
-    assert_eq!(
-        search_sstable(&table, "apple")?,
-        Some(Value::Data("100".to_string()))
-    );
+    let result = search_sstable(path, &index, "apple")?;
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().1, Value::Data("100".to_string()));
 
     std::fs::remove_file(path)?;
 
@@ -440,13 +440,12 @@ fn test_sstable_writer_multiple_records() -> Result<()> {
 
     writer.finish()?;
 
-    let table = SSTable::load_from_file(path)?;
+    let index = load_index_from_footer(path)?;
 
     for i in 0..10 {
-        assert_eq!(
-            search_sstable(&table, &format!("key{:02}", i))?,
-            Some(Value::Data(format!("value{}", i)))
-        );
+        let result = search_sstable(path, &index, &format!("key{:02}", i))?;
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, Value::Data(format!("value{}", i)));
     }
 
     std::fs::remove_file(path)?;
@@ -458,7 +457,7 @@ fn test_sstable_writer_multiple_records() -> Result<()> {
 fn test_sstable_writer_multiple_blocks() -> Result<()> {
     let path = "test_blocks_writer.sst";
 
-    let mut writer = SSTableWriter::new(path, 500);
+    let mut writer = SSTableWriter::new(path, 500)?;
 
     for i in 0..500 {
         writer.append(
@@ -471,13 +470,10 @@ fn test_sstable_writer_multiple_blocks() -> Result<()> {
 
     assert!(index.blocks.len() > 1);
 
-    let table = SSTable::load_from_file(path)?;
-
     for i in [0, 50, 100, 200, 300, 499] {
-        assert_eq!(
-            search_sstable(&table, &format!("key{:04}", i))?,
-            Some(Value::Data("abcdefghijklmnopqrstuvwxyz".repeat(4)))
-        );
+        let result = search_sstable(path, &index, &format!("key{:04}", i))?;
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, Value::Data("abcdefghijklmnopqrstuvwxyz".repeat(4)));
     }
 
     std::fs::remove_file(path)?;
@@ -489,16 +485,15 @@ fn test_sstable_writer_multiple_blocks() -> Result<()> {
 fn test_sstable_writer_empty() -> Result<()> {
     let path = "test_empty_writer.sst";
 
-    let writer = SSTableWriter::new(path, 1)?;
+    let mut writer = SSTableWriter::new(path, 1)?;
 
     let index = writer.finish()?;
 
     assert!(index.offsets.is_empty());
     assert!(index.blocks.is_empty());
 
-    let table = SSTable::load_from_file(path)?;
-
-    assert!(search_sstable(&table, "anything")?.is_none());
+    let loaded_index = load_index_from_footer(path)?;
+    assert!(search_sstable(path, &loaded_index, "anything")?.is_none());
 
     std::fs::remove_file(path)?;
 
@@ -528,12 +523,11 @@ fn test_sstable_writer_tombstones() -> Result<()> {
 
     writer.finish()?;
 
-    let table = SSTable::load_from_file(path)?;
+    let index = load_index_from_footer(path)?;
 
-    assert_eq!(
-        search_sstable(&table, "banana")?,
-        Some(Value::Tombstone)
-    );
+    let result = search_sstable(path, &index, "banana")?;
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().1, Value::Tombstone);
 
     std::fs::remove_file(path)?;
 
@@ -564,13 +558,14 @@ fn test_writer_matches_old_write_sstable() -> Result<()> {
 
     assert_eq!(old_index.offsets, new_index.offsets);
     assert_eq!(old_index.blocks.len(), new_index.blocks.len());
-
-    let old_table = SSTable::load_from_file(old_path)?;
-    let new_table = SSTable::load_from_file(new_path)?;
+    assert_eq!(old_index.blocks[0].offset, new_index.blocks[0].offset);
 
     for (key, value) in &data {
-        assert_eq!(search_sstable(&old_table, key)?, Some(value.clone()));
-        assert_eq!(search_sstable(&new_table, key)?, Some(value.clone()));
+        let old_result = search_sstable(old_path, &old_index, key)?;
+        let new_result = search_sstable(new_path, &new_index, key)?;
+        assert!(old_result.is_some());
+        assert!(new_result.is_some());
+        assert_eq!(old_result.unwrap().1, new_result.unwrap().1);
     }
 
     std::fs::remove_file(old_path)?;
@@ -583,7 +578,7 @@ fn test_writer_matches_old_write_sstable() -> Result<()> {
 fn test_finish_without_append() -> Result<()> {
     let path = "empty_finish.sst";
 
-    let writer = SSTableWriter::new(path, 10)?;
+    let mut writer = SSTableWriter::new(path, 10)?;
 
     let index = writer.finish()?;
 

@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, sync::atomic::{AtomicU64, Ordering}};
 
-use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable::{SSTableIndex, SSTableIterator, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
+use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, merge_iterator::MergeIterator, sstable::{SSTableIndex, SSTableIterator, SSTableWriter, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -279,6 +279,73 @@ impl SSTableManager {
         Ok(None)
     }
 
+    fn write_merged_tables(
+        &self,
+        tables: &[&SSTable],
+        output_path: &str,
+        output_level: Level,
+        drop_tombstones: bool,
+    ) -> Result<(SSTableIndex, BloomFilter, String, String, u64)> {
+        let mut iters = Vec::new();
+
+        for table in tables {
+            iters.push(
+                SSTableIterator::new(
+                    &table.path,
+                    table.index.clone(),
+                )?
+            );
+        }
+
+        let mut merge =
+            MergeIterator::new(
+                iters,
+                drop_tombstones,
+            )?;
+        
+        let estimated_records: usize = tables
+            .iter()
+            .map(|t| t.index.offsets.len())
+            .sum();
+
+        let mut writer =
+            SSTableWriter::new(
+                output_path,
+                estimated_records,
+            )?;
+
+        let mut min_key = None;
+        let mut max_key = None;
+
+        while let Some(record) = merge.next()? {
+
+            if min_key.is_none() {
+                min_key = Some(record.key.clone());
+            }
+
+            max_key = Some(record.key.clone());
+
+            writer.append(
+                record.key,
+                record.value,
+            )?;
+        }
+
+        let index = writer.finish()?;
+
+        let bloom = load_bloom_from_footer(output_path)?;
+
+        let file_size = fs::metadata(output_path)?.len();
+
+        Ok((
+            index,
+            bloom,
+            min_key.unwrap_or_default(),
+            max_key.unwrap_or_default(),
+            file_size,
+        ))
+    }
+
     fn all_tables(&self) -> impl Iterator<Item = &SSTable> {
         self.l0
             .iter()
@@ -345,63 +412,6 @@ impl SSTableManager {
         self.l1.push(SSTable { path, index, bloom, level: Level::L1, min_key, max_key, file_size });
 
         self.checkpoint_manifest()?;
-
-        Ok(())
-    }
-
-    pub fn compact_l0_to_l1(&mut self) -> Result<()> {
-        if self.l0.is_empty() {
-            return Ok(());
-        }
-
-        let mut merged= BTreeMap::<String, Value>::new();
-
-        for table in &self.l0 {
-            let mut data= SSTableIterator::new(&table.path, table.index.clone())?;
-
-            while let Some(record) = data.next()? {
-                merged.insert(record.key, record.value);
-            }
-        }
-
-        let sorted: Vec<_>= merged.into_iter().collect();
-
-        let path= format!("sst_l1_{}.bin", next_sstable_id());
-
-        let index= write_sstable(&path, &sorted)?;
-
-        let mut bloom= BloomFilter::with_rate(0.01, sorted.len().max(8) as u32);
-
-        let min_key= sorted.first().map(|(k, _)|k.clone()).unwrap();
-
-        let max_key= sorted.last().map(|(k, _)|k.clone()).unwrap();
-
-
-        for (k,_) in &sorted {
-            bloom.insert(k);
-        }
-
-        for table in &self.l0 {
-            let _= fs::remove_file(&table.path);
-        }
-
-        self.l0.clear();
-
-        let file_size= fs::metadata(&path)?.len();
-
-        self.install_table(
-            Level::L1,
-            path,
-            index,
-            bloom,
-            min_key,
-            max_key,
-            file_size,
-        )?;
-
-        if self.l1.len() >= L1_COMPACTION_THRESHOLD {
-            let _= self.compact_l1_to_l2();
-        }
 
         Ok(())
     }
@@ -495,46 +505,31 @@ impl SSTableManager {
             return Ok(());
         }
 
-        let mut merged = BTreeMap::<String, Value>::new();
-
-        // Iterate candidates in ascending L0 index order (oldest first), so that
-        // newer files (higher index) overwrite older ones via BTreeMap::insert.
         let mut indexed_candidates = candidates.clone();
         indexed_candidates.sort();
-        for idx in &indexed_candidates {
-            let table = &self.l0[*idx];
 
-            let mut data = SSTableIterator::new(&table.path, table.index.clone())?;
-            
-            while let Some(record)= data.next()? {
-                merged.insert(record.key, record.value);
-            }
-        }
+        let tables: Vec<&SSTable> = indexed_candidates
+            .iter()
+            .map(|idx| &self.l0[*idx])
+            .collect();
 
-        let sorted: Vec<_> = merged.into_iter().collect();
-
-        let path = format!("sst_l1_{}.bin", next_sstable_id());
-
-        let index = write_sstable(&path, &sorted)?;
-
-        let file_size = fs::metadata(&path)?.len();
-
-        let mut bloom = BloomFilter::with_rate(
-            0.01,
-            sorted.len().max(8) as u32
+        let path = format!(
+            "sst_l1_{}.bin",
+            next_sstable_id()
         );
 
-        for (k, _) in &sorted {
-            bloom.insert(k);
-        }
-
-        let min_key = sorted.first()
-            .map(|(k, _)| k.clone())
-            .unwrap();
-
-        let max_key = sorted.last()
-            .map(|(k, _)| k.clone())
-            .unwrap();
+        let (
+            index,
+            bloom,
+            min_key,
+            max_key,
+            file_size,
+        ) = self.write_merged_tables(
+            &tables,
+            &path,
+            Level::L1,
+            false,
+        )?;
 
         // Remove candidates in descending index order so that
         // removing one doesn't shift the indices of remaining candidates.
