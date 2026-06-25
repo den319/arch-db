@@ -7,7 +7,7 @@ use std::{
 use crc32fast::hash;
 use snap::raw::{Decoder, Encoder};
 
-use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, sstable_manager::SSTable};
+use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, helper::is_sorted, sstable_manager::SSTable};
 
 #[derive(Debug, Clone)]
 pub struct BlockMeta {
@@ -522,6 +522,11 @@ pub fn write_sstable(
     path: &str,
     data: &[(String, Value)],
 ) -> Result<SSTableIndex> {
+
+    // debug_assert!(is_sorted(data));
+
+    assert!(is_sorted(data), "write_sstable() requires sorted keys");
+
     let mut writer =
         SSTableWriter::new(path, data.len())?;
 
@@ -531,6 +536,7 @@ pub fn write_sstable(
 
     writer.finish()
 }
+
 pub fn read_sstable(path: &str) -> Result<Vec<(String, Value)>> {
     let mut file = File::open(path)?;
 

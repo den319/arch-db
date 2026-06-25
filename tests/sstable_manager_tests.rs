@@ -184,26 +184,31 @@ fn test_tombstone_survives_compaction() {
     let mut manager = SSTableManager::new();
 
     let d1 = vec![
-        ("user".to_string(), Value::Data("john".into())),
         ("a".into(), Value::Data("x".into())),
+        ("user".to_string(), Value::Data("john".into())),
     ];
     let d2 = vec![
-        ("user".to_string(), Value::Tombstone),
         ("a".into(), Value::Data("x".into())),
+        ("user".to_string(), Value::Tombstone),
     ];
     let d3 = vec![
-        ("user".to_string(), Value::Data("other".into())),
         ("a".into(), Value::Data("x".into())),
+        ("user".to_string(), Value::Data("other".into())),
     ];
 
     let f1 = unique_file("tombstone_d1", "bin");
     let f2 = unique_file("tombstone_d2", "bin");
     let f3 = unique_file("tombstone_d3", "bin");
 
+    
     let i1 = write_sstable(&f1, &d1).unwrap();
     let i2 = write_sstable(&f2, &d2).unwrap();
     let i3 = write_sstable(&f3, &d3).unwrap();
-
+    
+    // println!("reading sstable-f1: {:#?}", read_sstable(&f1).unwrap());
+    // println!("reading sstable-f2: {:#?}", read_sstable(&f2).unwrap());
+    // println!("reading sstable-f3: {:#?}", read_sstable(&f3).unwrap());
+    
     let mut b1 = BloomFilter::with_rate(0.01, 8);
     b1.insert(&"user".to_string());
     b1.insert(&"a".to_string());
@@ -465,12 +470,13 @@ fn test_tombstone_overwrites_l2_data() {
         file_size: s1,
     });
     manager.compact_l1_to_l2().unwrap();
-    let result = search_sstable(&manager.l2[0].path, &manager.l2[0].index, "user").unwrap();
-    match result {
-        Some((_, Value::Tombstone)) => {}
-        _ => panic!("expected tombstone"),
-    }
-    fs::remove_file(&manager.l2[0].path).unwrap();
+
+    // With drop_tombstones=true, the tombstone is applied and removed.
+    // L2 should be empty (the old data was removed and tombstone was dropped).
+    assert_eq!(manager.l2.len(), 0,
+        "Expected tombstone to be dropped and L2 to be empty"
+    );
+    assert_eq!(manager.l1.len(), 0);
 }
 
 #[test]
@@ -963,50 +969,15 @@ fn test_manifest_log_truncated_after_checkpoint() {
 
 #[test]
 fn test_compaction_splits_output_into_multiple_tables() {
-    let mut manager = SSTableManager::new();
-
-    // Generate enough data to exceed TARGET_TABLE_SIZE.
-    let mut data = Vec::new();
-
-    for i in 0..100 {
-        data.push((
-            format!("key_{:03}", i),
-            Value::Data("x".repeat(50)),
-        ));
-    }
-
-    let file = unique_file("split_input", "bin");
-
-    let index = write_sstable(&file, &data).unwrap();
-
-    let mut bloom = BloomFilter::with_rate(0.01, data.len() as u32);
-
-    for (k, _) in &data {
-        bloom.insert(k);
-    }
-
-    let size = fs::metadata(&file).unwrap().len();
-
-    manager.l0.push(SSTable {
-        path: file,
-        index,
-        bloom,
-        level: Level::L0,
-        min_key: "key_000".into(),
-        max_key: "key_099".into(),
-        file_size: size,
-    });
-
-    manager.size_tiered_compact_l0().unwrap();
+    let manager = create_large_compacted_manager();
 
     assert!(
         manager.l1.len() > 1,
-        "Expected multiple SSTables after compaction"
+        "Expected multiple SSTables after compaction, got {}",
+        manager.l1.len()
     );
 
-    for table in &manager.l1 {
-        let _ = fs::remove_file(&table.path);
-    }
+    cleanup_manager(&manager);
 }
 
 
@@ -1066,48 +1037,42 @@ fn test_split_tables_preserve_all_records() {
 fn create_large_compacted_manager() -> SSTableManager {
     let mut manager = SSTableManager::new();
 
-    // Generate enough data to exceed TARGET_TABLE_SIZE.
-    let mut data = Vec::new();
+    // Push 3 L0 tables so size_tiered_compact_l0 triggers (needs >= 3)
+    for batch in 0..3 {
+        let mut data = Vec::new();
+        for i in 0..100 {
+            data.push((
+                format!("key_{:03}", i),
+                Value::Data("x".repeat(50)),
+            ));
+        }
 
-    for i in 0..100 {
-        data.push((
-            format!("key_{:03}", i),
-            Value::Data("x".repeat(50)),
-        ));
+        let file = unique_file(&format!("split_input_batch{}", batch), "bin");
+        let index = write_sstable(&file, &data).unwrap();
+        let mut bloom = BloomFilter::with_rate(0.01, data.len() as u32);
+        for (k, _) in &data {
+            bloom.insert(k);
+        }
+        let size = fs::metadata(&file).unwrap().len();
+
+        manager.l0.push(SSTable {
+            path: file,
+            index,
+            bloom,
+            level: Level::L0,
+            min_key: "key_000".into(),
+            max_key: "key_099".into(),
+            file_size: size,
+        });
     }
-
-    let file = unique_file("split_input", "bin");
-
-    let index = write_sstable(&file, &data).unwrap();
-
-    let mut bloom = BloomFilter::with_rate(0.01, data.len() as u32);
-
-    for (k, _) in &data {
-        bloom.insert(k);
-    }
-
-    let size = fs::metadata(&file).unwrap().len();
-
-    manager.l0.push(SSTable {
-        path: file,
-        index,
-        bloom,
-        level: Level::L0,
-        min_key: "key_000".into(),
-        max_key: "key_099".into(),
-        file_size: size,
-    });
 
     manager.size_tiered_compact_l0().unwrap();
 
     assert!(
         manager.l1.len() > 1,
-        "Expected multiple SSTables after compaction"
+        "Expected multiple SSTables after compaction, got {}",
+        manager.l1.len()
     );
-
-    for table in &manager.l1 {
-        let _ = fs::remove_file(&table.path);
-    }
 
     manager
 }

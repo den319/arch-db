@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, sync::atomic::{AtomicU64, Ordering}};
 
-use crate::{bloom_filter::BloomFilter, engine::Value, error::Result, merge_iterator::MergeIterator, sstable::{SSTableIndex, SSTableIterator, SSTableWriter, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
+use crate::{bloom_filter::BloomFilter, compaction_picker::{CompactionCandidate, CompactionPicker}, engine::Value, error::Result, merge_iterator::MergeIterator, sstable::{SSTableIndex, SSTableIterator, SSTableWriter, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -134,17 +134,22 @@ impl SSTableManager {
     pub fn maybe_compact(&mut self) -> Result<()> {
         match self.strategy {
             CompactionStrategy::Leveled => {
-                if self.l0.len() >= 4 {
-                    self.size_tiered_compact_l0()?;
+
+                if let Some(candidate) =
+                    CompactionPicker::pick_l0(self)
+                {
+                    self.size_tiered_compact_l0(&candidate)?;
                 }
 
-                if self.l1.len() >= 4 {
-                    self.compact_l1_to_l2()?;
+                if let Some(candidate) =
+                    CompactionPicker::pick_l1(self)
+                {
+                    self.compact_l1_to_l2(&candidate)?;
                 }
             }
 
             CompactionStrategy::SizeTiered => {
-
+                // We'll implement this later.
             }
         }
 
@@ -505,20 +510,12 @@ impl SSTableManager {
         Ok(())
     }
 
-    pub fn compact_l1_to_l2(&mut self) -> Result<()> {
-        if self.l1.is_empty() {
-            return Ok(());
-        }
+    pub fn compact_l1_to_l2(&mut self, candidate: &CompactionCandidate) -> Result<()> {
+        let l1_index = candidate.input_tables[0];
 
-        let l1_min = self.l1[0].min_key.clone();
-        let l1_max = self.l1[0].max_key.clone();
+        let l1_table = &self.l1[l1_index];
 
-        let overlapping_indices:Vec<usize> = self.l2.iter().enumerate()
-            .filter(|(_,table)| {
-                table.overlaps(&l1_min, &l1_max)
-            })
-            .map(|(idx, _)| idx)
-            .collect();
+        let overlapping_indices = candidate.output_tables.clone();
 
         println!("Found {} overlapping tables",overlapping_indices.len());
 
@@ -530,7 +527,7 @@ impl SSTableManager {
         }
 
         // Newer L1 table last
-        tables.push(&self.l1[0]);
+        tables.push(l1_table);
 
         let path = format!(
             "sst_l2_{}.bin",
@@ -552,10 +549,10 @@ impl SSTableManager {
             fs::remove_file(&table.path)?;
         }
 
-        self.manifest.append(&ManifestRecord::RemoveTable { path: self.l1[0].path.clone() })?;
-        fs::remove_file(&self.l1[0].path)?;
+        self.manifest.append(&ManifestRecord::RemoveTable { path: self.l1[l1_index].path.clone() })?;
+        fs::remove_file(&self.l1[l1_index].path)?;
 
-        self.l1.remove(0);
+        self.l1.remove(l1_index);
 
         for table in created_tables {
             self.install_table(
@@ -575,8 +572,8 @@ impl SSTableManager {
         Ok(())
     }
 
-    pub fn size_tiered_compact_l0(&mut self) -> Result<()> {
-        let candidates = self.find_size_tiered_candidates();
+    pub fn size_tiered_compact_l0(&mut self, candidate: &CompactionCandidate) -> Result<()> {
+        let candidates = candidate.input_tables.clone();  
 
         if candidates.is_empty() {
             return Ok(());

@@ -11,3 +11,4 @@ pub mod bloom_filter;
 pub mod schema;
 pub mod sql;
 pub mod merge_iterator;
+pub mod compaction_picker;

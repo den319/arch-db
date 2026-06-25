@@ -10,6 +10,7 @@ mod cache;
 mod bloom_filter;
 mod schema;
 mod merge_iterator;
+mod compaction_picker;
 
 use std::{io::{self, Write}};
 

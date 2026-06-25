@@ -20,6 +20,7 @@ impl Ord for HeapItem {
         other
             .key
             .cmp(&self.key)
+            // Higher iter_index = newer data = wins for duplicate keys
             .then_with(|| self.iter_index.cmp(&other.iter_index))
     }
 }
