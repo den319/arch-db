@@ -156,6 +156,111 @@ impl SSTableManager {
         Ok(())
     }
 
+    fn candidate_l0_tables(
+        &self,
+        candidate: &CompactionCandidate,
+    ) -> Vec<&SSTable> {
+        candidate
+            .input_tables
+            .iter()
+            .map(|&i| &self.l0[i])
+            .collect()
+    }
+
+    fn remove_l0_tables(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<()> {
+
+        let mut sorted = indices.to_vec();
+
+        sorted.sort_by(|a, b| b.cmp(a));
+
+        for idx in sorted {
+
+            let table = self.l0.remove(idx);
+
+            self.manifest.append(
+                &ManifestRecord::RemoveTable {
+                    path: table.path.clone(),
+                },
+            )?;
+
+            fs::remove_file(table.path)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_l1_tables(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<()> {
+
+        let mut sorted = indices.to_vec();
+
+        sorted.sort_by(|a, b| b.cmp(a));
+
+        for idx in sorted {
+
+            let table = self.l1.remove(idx);
+
+            self.manifest.append(
+                &ManifestRecord::RemoveTable {
+                    path: table.path.clone(),
+                },
+            )?;
+
+            fs::remove_file(table.path)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_l2_tables(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<()> {
+
+        let mut sorted = indices.to_vec();
+
+        sorted.sort_by(|a, b| b.cmp(a));
+
+        for idx in sorted {
+
+            let table = self.l2.remove(idx);
+
+            self.manifest.append(
+                &ManifestRecord::RemoveTable {
+                    path: table.path.clone(),
+                },
+            )?;
+
+            fs::remove_file(table.path)?;
+        }
+
+        Ok(())
+    }
+
+    fn candidate_l1_l2_tables(
+        &self,
+        candidate: &CompactionCandidate,
+    ) -> Vec<&SSTable> {
+        let mut tables = Vec::new();
+
+        // Older L2 first
+        for &idx in &candidate.output_tables {
+            tables.push(&self.l2[idx]);
+        }
+
+        // Newer L1 last
+        for &idx in &candidate.input_tables {
+            tables.push(&self.l1[idx]);
+        }
+
+        tables
+    }
+
     pub fn load_table_metadata(
         &mut self, 
         path: &str,
@@ -224,6 +329,7 @@ impl SSTableManager {
             }
         );
     }
+    
 
     pub fn register_table(&mut self, table: SSTable) {
         match table.level {
@@ -440,6 +546,91 @@ impl SSTableManager {
         Ok(created_tables)
     }
 
+    fn candidate_tables(
+        &self,
+        candidate: &CompactionCandidate,
+    ) -> Vec<&SSTable> {
+
+        let mut tables = Vec::new();
+
+        match candidate.input_level {
+
+            Level::L0 => {
+
+                for &idx in &candidate.input_tables {
+                    tables.push(&self.l0[idx]);
+                }
+            }
+
+            Level::L1 => {
+
+                // Older L2 tables first
+                for &idx in &candidate.output_tables {
+                    tables.push(&self.l2[idx]);
+                }
+
+                // Newer L1 tables last
+                for &idx in &candidate.input_tables {
+                    tables.push(&self.l1[idx]);
+                }
+            }
+
+            Level::L2 => {
+                unreachable!("No L2 compaction implemented yet");
+            }
+        }
+
+        tables
+    }
+
+    fn install_tables(
+        &mut self,
+        level: Level,
+        tables: Vec<CreatedTable>,
+    ) -> Result<()> {
+
+        for table in tables {
+
+            self.install_table(
+                level,
+                table.path,
+                table.index,
+                table.bloom,
+                table.min_key,
+                table.max_key,
+                table.file_size,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_tables(
+        tables: &mut Vec<SSTable>,
+        indices: &[usize],
+        manifest: &mut Manifest,
+    ) -> Result<()> {
+
+        let mut sorted = indices.to_vec();
+
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+
+        for idx in sorted {
+
+            let table = tables.remove(idx);
+
+            manifest.append(
+                &ManifestRecord::RemoveTable {
+                    path: table.path.clone(),
+                },
+            )?;
+
+            fs::remove_file(table.path)?;
+        }
+
+        Ok(())
+    }
+
     fn all_tables(&self) -> impl Iterator<Item = &SSTable> {
         self.l0
             .iter()
@@ -519,15 +710,7 @@ impl SSTableManager {
 
         println!("Found {} overlapping tables",overlapping_indices.len());
 
-        let mut tables: Vec<&SSTable> = Vec::new();
-
-        // Older L2 tables first
-        for idx in &overlapping_indices {
-            tables.push(&self.l2[*idx]);
-        }
-
-        // Newer L1 table last
-        tables.push(l1_table);
+        let tables = self.candidate_tables(candidate);
 
         let path = format!(
             "sst_l2_{}.bin",
@@ -549,25 +732,14 @@ impl SSTableManager {
             fs::remove_file(&table.path)?;
         }
 
-        self.manifest.append(&ManifestRecord::RemoveTable { path: self.l1[l1_index].path.clone() })?;
-        fs::remove_file(&self.l1[l1_index].path)?;
+        self.manifest.append(&ManifestRecord::RemoveTable { path: l1_table.path.clone() })?;
+        fs::remove_file(&l1_table.path)?;
 
         self.l1.remove(l1_index);
 
-        for table in created_tables {
-            self.install_table(
-                Level::L2,
-                table.path,
-                table.index,
-                table.bloom,
-                table.min_key,
-                table.max_key,
-                table.file_size,
-            )?;
+        self.install_tables(Level::L2, created_tables)?;
 
-        }
-
-        self.checkpoint_manifest()?;
+        // self.checkpoint_manifest()?;
 
         Ok(())
     }
@@ -579,14 +751,8 @@ impl SSTableManager {
             return Ok(());
         }
 
-        let mut indexed_candidates = candidates.clone();
-        indexed_candidates.sort();
-
         // L0: higher index = newer data. Reverse so newer values overwrite older ones.
-        let tables: Vec<&SSTable> = indexed_candidates
-            .iter()
-            .map(|idx| &self.l0[*idx])
-            .collect();
+        let tables = self.candidate_tables(candidate);
         // tables.reverse();
 
         let path = format!(
@@ -601,30 +767,9 @@ impl SSTableManager {
             false,
         )?;
 
+        self.remove_l0_tables(&candidates)?;
 
-        // Remove candidates in descending index order so that
-        // removing one doesn't shift the indices of remaining candidates.
-        let mut sorted_candidates = candidates.clone();
-        sorted_candidates.sort_by(|a, b| b.cmp(a));
-        for idx in sorted_candidates {
-            let old = self.l0.remove(idx);
-
-            self.manifest.append(&ManifestRecord::RemoveTable { path: old.path.clone() })?;
-            fs::remove_file(old.path)?;
-        }
-
-        for table in created_tables {
-            self.install_table(
-                Level::L1,
-                table.path,
-                table.index,
-                table.bloom,
-                table.min_key,
-                table.max_key,
-                table.file_size,
-            )?;
-
-        }
+        self.install_tables(Level::L1, created_tables)?;
 
         Ok(())
     }

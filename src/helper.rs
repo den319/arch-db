@@ -29,3 +29,4 @@ pub fn is_sorted(data: &[(String, Value)]) -> bool {
     data.windows(2)
         .all(|w| w[0].0 < w[1].0)
 }
+

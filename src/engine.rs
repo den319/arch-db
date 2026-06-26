@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync::{Arc, Mutex, mpsc::{self, Sender}}, thread};
 
-use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, error::Result, sstable::{binary_search_block, find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
+use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, compaction_picker::CompactionPicker, error::Result, sstable::{binary_search_block, find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
 use crate::cache::BlockCache;
 
 
@@ -185,8 +185,8 @@ impl Engine {
         }
 
         let mut sstables = self.sstables.lock().unwrap();
-        if sstables.l0.len() >= 4 {
-            sstables.size_tiered_compact_l0()?;
+        if let Some(candidate) = CompactionPicker::pick_l0(&sstables) {
+            sstables.size_tiered_compact_l0(&candidate)?;
         }
         
         self.memtable.clear();

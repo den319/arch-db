@@ -5,6 +5,7 @@ use arch_db::bloom_filter::BloomFilter;
 use arch_db::command::Command;
 use arch_db::engine::{Engine, Value};
 use arch_db::sstable::{SSTableIndex, load_index_from_footer, read_sstable, search_sstable, write_sstable};
+use arch_db::compaction_picker::CompactionCandidate;
 use arch_db::sstable_manager::{Level, Manifest, ManifestRecord, SSTable, SSTableManager};
 
 fn unique_file(prefix: &str, ext: &str) -> String {
@@ -106,7 +107,13 @@ fn test_compact_l0_to_l1() {
         file_size: s3,
     });
 
-    manager.size_tiered_compact_l0().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L0,
+        output_level: Level::L1,
+        input_tables: vec![0, 1, 2],
+        output_tables: vec![],
+    };
+    manager.size_tiered_compact_l0(&candidate).unwrap();
 
     assert_eq!(manager.l0.len(), 0);
     assert_eq!(manager.l1.len(), 1);
@@ -168,7 +175,13 @@ fn test_l0_compaction_keeps_latest_value() {
         file_size: s3,
     });
 
-    manager.size_tiered_compact_l0().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L0,
+        output_level: Level::L1,
+        input_tables: vec![0, 1, 2],
+        output_tables: vec![],
+    };
+    manager.size_tiered_compact_l0(&candidate).unwrap();
 
     let table = &manager.l1[0];
     let result = search_sstable(&table.path, &table.index, "user").unwrap();
@@ -251,7 +264,13 @@ fn test_tombstone_survives_compaction() {
         file_size: s2,
     });
 
-    manager.size_tiered_compact_l0().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L0,
+        output_level: Level::L1,
+        input_tables: vec![0, 1, 2],
+        output_tables: vec![],
+    };
+    manager.size_tiered_compact_l0(&candidate).unwrap();
 
     let data = read_sstable(&manager.l1[0].path).unwrap();
         println!("{:#?}", data);
@@ -383,7 +402,13 @@ fn test_compact_l1_to_l2_basic() {
         max_key: "b".into(),
         file_size,
     });
-    manager.compact_l1_to_l2().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L1,
+        output_level: Level::L2,
+        input_tables: vec![0],
+        output_tables: vec![],
+    };
+    manager.compact_l1_to_l2(&candidate).unwrap();
     assert_eq!(manager.l1.len(), 0);
     assert_eq!(manager.l2.len(), 1);
     let result = search_sstable(&manager.l2[0].path, &manager.l2[0].index, "a").unwrap();
@@ -427,7 +452,13 @@ fn test_l1_overwrites_l2_during_compaction() {
         max_key: "user".into(),
         file_size: s1,
     });
-    manager.compact_l1_to_l2().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L1,
+        output_level: Level::L2,
+        input_tables: vec![0],
+        output_tables: vec![0],
+    };
+    manager.compact_l1_to_l2(&candidate).unwrap();
     let result = search_sstable(&manager.l2[0].path, &manager.l2[0].index, "user").unwrap();
     match result {
         Some((_, Value::Data(v))) => assert_eq!(v, "new"),
@@ -469,7 +500,13 @@ fn test_tombstone_overwrites_l2_data() {
         max_key: "user".into(),
         file_size: s1,
     });
-    manager.compact_l1_to_l2().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L1,
+        output_level: Level::L2,
+        input_tables: vec![0],
+        output_tables: vec![0],
+    };
+    manager.compact_l1_to_l2(&candidate).unwrap();
 
     // With drop_tombstones=true, the tombstone is applied and removed.
     // L2 should be empty (the old data was removed and tombstone was dropped).
@@ -512,7 +549,13 @@ fn test_non_overlapping_l2_table_survives() {
         max_key: "a".into(),
         file_size: s1,
     });
-    manager.compact_l1_to_l2().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L1,
+        output_level: Level::L2,
+        input_tables: vec![0],
+        output_tables: vec![],
+    };
+    manager.compact_l1_to_l2(&candidate).unwrap();
     assert_eq!(manager.l2.len(), 2);
     assert!(manager.l2.iter().any(|t| t.min_key == "x"));
     for table in &manager.l2 {
@@ -819,7 +862,13 @@ fn test_manifest_after_compaction() {
     // Instead, let's add them via add_table first
     // Actually the test just needs to verify that compaction writes REMOVE
     // So let's push tables directly and call compact
-    manager.size_tiered_compact_l0().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L0,
+        output_level: Level::L1,
+        input_tables: vec![0, 1, 2, 3],
+        output_tables: vec![],
+    };
+    manager.size_tiered_compact_l0(&candidate).unwrap();
 
     // Wait a bit for background ops
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1066,7 +1115,13 @@ fn create_large_compacted_manager() -> SSTableManager {
         });
     }
 
-    manager.size_tiered_compact_l0().unwrap();
+    let candidate = CompactionCandidate {
+        input_level: Level::L0,
+        output_level: Level::L1,
+        input_tables: vec![0, 1, 2],
+        output_tables: vec![],
+    };
+    manager.size_tiered_compact_l0(&candidate).unwrap();
 
     assert!(
         manager.l1.len() > 1,
