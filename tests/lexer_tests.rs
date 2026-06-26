@@ -142,11 +142,11 @@ fn lex_number() {
 
 #[test]
 fn lex_string() {
-    let mut lexer = Lexer::new("'Dharmik'");
+    let mut lexer = Lexer::new("'jhon'");
 
     assert_eq!(
         lexer.next_token(),
-        Token::String("Dharmik".to_string())
+        Token::String("jhon".to_string())
     );
 
     assert_eq!(lexer.next_token(), Token::EOF);
@@ -172,7 +172,7 @@ fn lex_values() {
 #[test]
 fn lex_insert_statement() {
     let mut lexer =
-        Lexer::new("INSERT INTO users VALUES (1, 'Dharmik');");
+        Lexer::new("INSERT INTO users VALUES (1, 'jhon');");
 
     assert_eq!(lexer.next_token(), Token::Insert);
     assert_eq!(lexer.next_token(), Token::Into);
@@ -189,7 +189,7 @@ fn lex_insert_statement() {
 
     assert_eq!(
         lexer.next_token(),
-        Token::String("Dharmik".to_string())
+        Token::String("jhon".to_string())
     );
 
     assert_eq!(lexer.next_token(), Token::RightParen);

@@ -188,7 +188,7 @@ fn test_multiple_lock_scopes() {
 
     let mut engine = Engine::new();
 
-    engine.execute(Command::Set("name".to_string(), "dharmik".to_string()));
+    engine.execute(Command::Set("name".to_string(), "jhon".to_string()));
 
     {
         let sstables = engine.sstables.lock().unwrap();
@@ -200,7 +200,7 @@ fn test_multiple_lock_scopes() {
     }
 
     match engine.get_key("name") {
-        Some(Value::Data(v)) => assert_eq!(v, "dharmik"),
+        Some(Value::Data(v)) => assert_eq!(v, "jhon"),
         _ => panic!("expected value"),
     }
 }

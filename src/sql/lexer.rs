@@ -93,7 +93,7 @@ impl Lexer {
         let start= self.position;
 
         while let Some(ch)= self.current_char() {
-            if ch.is_alphabetic() || ch == '_' {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
                 self.advance();
             } else { 
                 break;
