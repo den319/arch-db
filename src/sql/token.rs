@@ -8,6 +8,7 @@ pub enum Token {
     Delete,
     Update,
     Create,
+    Set,
 
     Into,
     Values,
@@ -40,6 +41,7 @@ impl Display for Token {
             Token::Delete => write!(f, "DELETE"),
             Token::Update => write!(f, "UPDATE"),
             Token::Create => write!(f, "CREATE"),
+            Token::Set => write!(f, "SET"),
 
             Token::Into => write!(f, "INTO"),
             Token::Values => write!(f, "VALUES"),

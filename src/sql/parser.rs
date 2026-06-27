@@ -146,13 +146,48 @@ impl Parser {
 
             if self.current_token == Token::Comma {
                 self.advance();
-                continue;
+            } else {
+                break;
             }
 
-            break;
         }
 
         exprs
+    }
+
+    fn parse_select_items(&mut self) -> Vec<SelectItem> {
+        let mut items = Vec::new();
+        let mut wildcard_seen = false;
+
+        loop {
+            match &self.current_token {
+                Token::Star => {
+                    if wildcard_seen {
+                        panic!("Multiple wildcards are not allowed");
+                    }
+                    self.advance();
+                    items.push(SelectItem::Wildcard);
+                    wildcard_seen = true;
+                }
+
+                Token::Identifier(name) => {
+                    items.push(
+                        SelectItem::Column(name.clone())
+                    );
+                    self.advance();
+                }
+
+                _ => panic!("Expected column name or '*'"),
+            }
+
+            if self.current_token == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        items
     }
 
     fn parse_create_table(
@@ -201,8 +236,87 @@ impl Parser {
         &self.current_token == token
     }
 
+    fn consume_optional_semicolon(&mut self) {
+        if self.current_token == Token::Semicolon {
+            self.advance();
+        }
+    }
+
+    fn parse_assignment(&mut self) -> Assignment {
+        let column = self.parse_identifier();
+
+        self.expect(Token::Equal);
+
+        let value = self.parse_literal();
+
+        Assignment {
+            column,
+            value,
+        }
+    }
+
+    fn parse_assignment_list(&mut self) -> Vec<Assignment> {
+        let mut assignments = Vec::new();
+
+        loop {
+            assignments.push(
+                self.parse_assignment()
+            );
+
+            if self.current_token == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        assignments
+    }
+
+    pub fn parse_expression(&mut self) -> Expr {
+        let left = self.parse_literal();
+
+        let op = match self.current_token {
+            Token::Equal => {
+                self.advance();
+                BinaryOperator::Equal
+            }
+
+            _ => panic!("Expected binary operator"),
+        };
+
+        let right = self.parse_literal();
+
+        Expr::Binary {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        }
+    }
+
     fn parse_select(&mut self) -> Statement {
-        todo!()
+        self.expect(Token::Select);
+
+        let columns = self.parse_select_items();
+
+        self.expect(Token::From);
+
+        let table_name = self.parse_identifier();
+
+        let where_clause =
+            if self.current_token == Token::Where {
+                self.advance();
+                Some(self.parse_expression())
+            } else {
+                None
+            };
+
+
+        Statement::Select(Select {
+            columns,
+            table_name,
+            where_clause,
+        })
     }
 
     fn parse_insert(&mut self) -> Statement {
@@ -226,6 +340,14 @@ impl Parser {
 
         self.expect(Token::RightParen);
 
+        if columns.len() != values.len() {
+            panic!(
+                "Column count mismatch: expected {}, got {}",
+                columns.len(),
+                values.len()
+            );
+        }
+
         if self.current_token == Token::Semicolon {
             self.advance();
         }
@@ -238,10 +360,51 @@ impl Parser {
     }
 
     fn parse_delete(&mut self) -> Statement {
-        todo!()
+        self.expect(Token::Delete);
+
+        self.expect(Token::From);
+
+        let table_name = self.parse_identifier();
+
+        let where_clause =
+            if self.current_token == Token::Where {
+                self.advance();
+                Some(self.parse_expression())
+            } else {
+                None
+            };
+
+        self.consume_optional_semicolon();
+
+        Statement::Delete(Delete {
+            table_name,
+            where_clause,
+        })
     }
 
     fn parse_update(&mut self) -> Statement {
-        todo!()
+        self.expect(Token::Update);
+
+        let table_name = self.parse_identifier();
+
+        self.expect(Token::Set);
+
+        let assignments = self.parse_assignment_list();
+
+        let where_clause =
+            if self.current_token == Token::Where {
+                self.advance();
+                Some(self.parse_expression())
+            } else {
+                None
+            };
+
+        self.consume_optional_semicolon();
+
+        Statement::Update(Update {
+            table_name,
+            assignments,
+            where_clause,
+        })
     }
 }

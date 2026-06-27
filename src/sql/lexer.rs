@@ -110,6 +110,7 @@ impl Lexer {
             "DELETE" => Token::Delete,
             "UPDATE" => Token::Update,
             "CREATE" => Token::Create,
+            "SET" => Token::Set,
 
             "FROM" => Token::From,
             "WHERE" => Token::Where,
