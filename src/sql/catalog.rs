@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::sql::ast;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataType {
     Integer,
@@ -31,6 +33,15 @@ impl TableSchema {
 
     pub fn primary_key(&self) -> Option<&Column> {
         self.columns.iter().find(|c| c.primary_key)
+    }
+}
+
+impl From<ast::DataType> for DataType {
+    fn from(value: ast::DataType) -> Self {
+        match value {
+            ast::DataType::Int => DataType::Integer,
+            ast::DataType::Text => DataType::Text,
+        }
     }
 }
 

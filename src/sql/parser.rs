@@ -270,6 +270,12 @@ impl Parser {
             }
         }
 
+        // After parsing all assignments, verify the next token is valid
+        match &self.current_token {
+            Token::Where | Token::Semicolon | Token::EOF => {},
+            _ => panic!("Expected comma between assignments"),
+        }
+
         assignments
     }
 
