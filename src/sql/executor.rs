@@ -1,4 +1,4 @@
-use crate::{error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}}, storage::Storage};
+use crate::{error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, Value}, table::Table}, storage::Storage};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -9,10 +9,16 @@ pub enum QueryResult {
     Rows(Vec<Vec<String>>),
 }
 
+pub enum ExecutionResult {
+    Success,
+    Rows(Vec<Row>),
+}
+
 pub struct Executor<'a> {
     pub catalog: &'a mut Catalog,
     pub storage: &'a mut Storage,
 }
+
 
 impl<'a> Executor<'a> {
     pub fn new(
@@ -27,31 +33,31 @@ impl<'a> Executor<'a> {
 
     pub fn execute(
         &mut self,
-        stmt: Statement,
+        statement: Statement,
     ) -> QueryResult {
 
-        match stmt {
+        match statement {
 
-            Statement::CreateTable(stmt) =>
-                self.execute_create_table(stmt).unwrap_or_else(|e| {
+            Statement::CreateTable(statement) =>
+                self.execute_create_table(statement).unwrap_or_else(|e| {
                     QueryResult::Message(format!("Error: {}", e))
                 }),
 
-            Statement::Insert(stmt) =>
-                self.execute_insert(stmt),
+            Statement::Insert(statement) =>
+                self.execute_insert(statement),
 
-            Statement::Select(stmt) =>
-                self.execute_select(stmt),
+            Statement::Select(statement) =>
+                self.execute_select(statement),
 
-            Statement::Delete(stmt) =>
-                self.execute_delete(stmt),
+            Statement::Delete(statement) =>
+                self.execute_delete(statement),
 
-            Statement::Update(stmt) =>
-                self.execute_update(stmt),
+            Statement::Update(statement) =>
+                self.execute_update(statement),
         }
     }
 
-    fn execute_create_table(
+    pub fn execute_create_table(
         &mut self,
         stmt: CreateTable,
     ) -> Result<QueryResult> {
@@ -80,28 +86,66 @@ impl<'a> Executor<'a> {
         ))
     }
 
-    fn execute_insert(
+    pub fn execute_insert(
         &mut self,
         stmt: Insert,
-    ) -> QueryResult {
-        todo!()
+    ) -> Result<QueryResult> {
+        let schema = self
+            .catalog
+            .table(&stmt.table_name)
+            .ok_or(DatabaseError::Other(
+                format!("table '{}' does not exist", stmt.table_name),
+            ))?
+            .clone();
+
+        let table = Table::new(schema);
+
+        let mut values = Vec::new();
+
+        for expr in stmt.values {
+            let value = match expr {
+                Expr::Number(n) => Value::Integer(n),
+
+                Expr::String(s) => Value::Text(s),
+
+                _ => {
+                    return Err(DatabaseError::Other(
+                        "unsupported expression".into(),
+                    ));
+                }
+            };
+
+            values.push(value);
+        }
+
+        let row = Row::from_columns(
+            stmt.columns,
+            values,
+        )
+        .map_err(|e| DatabaseError::Other(e))?;
+
+        println!("{:#?}", row);
+
+        Ok(QueryResult::Message(
+            "Insert parsed successfully".into(),
+        ))
     }
 
-    fn execute_select(
+    pub fn execute_select(
         &mut self,
         stmt: Select,
     ) -> QueryResult {
         todo!()
     }
 
-    fn execute_delete(
+    pub fn execute_delete(
         &mut self,
         stmt: Delete,
     ) -> QueryResult {
         todo!()
     }
 
-    fn execute_update(
+    pub fn execute_update(
         &mut self,
         stmt: Update,
     ) -> QueryResult {
