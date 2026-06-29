@@ -1,4 +1,4 @@
-use arch_db::sql::{catalog::{Column, DataType, TableSchema}, row::{Row, Value}, table::Table};
+use arch_db::sql::{catalog::{Column, DataType, TableSchema}, row::{Row, RowValue}, table::Table};
 
 #[test]
 fn test_primary_key_integer() {
@@ -25,8 +25,8 @@ fn test_primary_key_integer() {
     let row = Row::from_columns(
         vec!["id".into(), "name".into()],
         vec![
-            Value::Integer(1),
-            Value::Text("Alice".into()),
+            RowValue::Integer(1),
+            RowValue::Text("Alice".into()),
         ],
     )
     .unwrap();
@@ -56,7 +56,7 @@ fn test_primary_key_text() {
     let row = Row::from_columns(
         vec!["username".into()],
         vec![
-            Value::Text("dharmik".into()),
+            RowValue::Text("dharmik".into()),
         ],
     )
     .unwrap();
@@ -86,7 +86,7 @@ fn test_storage_key() {
     let row = Row::from_columns(
         vec!["id".into()],
         vec![
-            Value::Integer(42),
+            RowValue::Integer(42),
         ],
     )
     .unwrap();
@@ -116,7 +116,7 @@ fn test_no_primary_key() {
     let row = Row::from_columns(
         vec!["name".into()],
         vec![
-            Value::Text("Alice".into()),
+            RowValue::Text("Alice".into()),
         ],
     )
     .unwrap();
@@ -152,7 +152,7 @@ fn test_missing_primary_key_value() {
     let row = Row::from_columns(
         vec!["name".into()],
         vec![
-            Value::Text("Alice".into()),
+            RowValue::Text("Alice".into()),
         ],
     )
     .unwrap();
@@ -182,7 +182,7 @@ fn test_storage_key_without_primary_key() {
     let row = Row::from_columns(
         vec!["name".into()],
         vec![
-            Value::Text("Alice".into()),
+            RowValue::Text("Alice".into()),
         ],
     )
     .unwrap();
@@ -216,7 +216,7 @@ fn test_storage_key_from_integer_primary_key() {
     let table = Table::new(schema);
 
     let key = table.storage_key_from_primary_key(
-        &Value::Integer(42),
+        &RowValue::Integer(42),
     );
 
     assert_eq!(
@@ -242,7 +242,7 @@ fn test_storage_key_from_text_primary_key() {
     let table = Table::new(schema);
 
     let key = table.storage_key_from_primary_key(
-        &Value::Text("alice".into()),
+        &RowValue::Text("alice".into()),
     );
 
     assert_eq!(
@@ -268,7 +268,7 @@ fn test_storage_key_without_primary_key_returns_none() {
     let table = Table::new(schema);
 
     let key = table.storage_key_from_primary_key(
-        &Value::Integer(1),
+        &RowValue::Integer(1),
     );
 
     assert_eq!(key, None);

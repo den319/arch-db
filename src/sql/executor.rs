@@ -1,10 +1,12 @@
-use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, Value}, table::Table}};
+use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, RowValue}, table::Table}};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
     None,
 
-    Message(String),
+    CommandComplete {
+        rows_affected: usize,
+    },
 
     Rows(Vec<Vec<String>>),
 }
@@ -62,16 +64,24 @@ impl<'a> Executor<'a> {
     fn expr_to_value(
         &self,
         expr: Expr,
-    ) -> Result<Value> {
+    ) -> Result<RowValue> {
         match expr {
-            Expr::Number(n) => Ok(Value::Integer(n)),
+            Expr::Number(n) => Ok(RowValue::Integer(n)),
 
-            Expr::String(s) => Ok(Value::Text(s)),
+            Expr::String(s) => Ok(RowValue::Text(s)),
 
             _ => Err(DatabaseError::Other(
                 "unsupported expression".into(),
             )),
         }
+    }
+
+    fn rows_affected_message(rows: usize) -> QueryResult {
+        QueryResult::Message(format!(
+            "Query OK, {} row{} affected",
+            rows,
+            if rows == 1 { "" } else { "s" }
+        ))
     }
 
     pub fn execute_create_table(
@@ -231,8 +241,8 @@ impl<'a> Executor<'a> {
                         .values
                         .into_values()
                         .map(|value| match value {
-                            Value::Integer(v) => v.to_string(),
-                            Value::Text(v) => v,
+                            RowValue::Integer(v) => v.to_string(),
+                            RowValue::Text(v) => v,
                         })
                         .collect::<Vec<_>>();
 
@@ -361,8 +371,8 @@ impl<'a> Executor<'a> {
             }
 
             let value = match assignment.value {
-                Expr::Number(n) => Value::Integer(n),
-                Expr::String(s) => Value::Text(s),
+                Expr::Number(n) => RowValue::Integer(n),
+                Expr::String(s) => RowValue::Text(s),
                 _ => {
                     return QueryResult::Message(
                         "Error: unsupported expression".into(),

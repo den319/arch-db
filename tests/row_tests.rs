@@ -1,4 +1,4 @@
-use arch_db::sql::row::{Row, RowError, Value};
+use arch_db::sql::row::{Row, RowError, RowValue};
 
 #[test]
 fn test_empty_row() {
@@ -15,17 +15,17 @@ fn test_empty_row() {
 fn test_insert_and_get() {
     let mut row = Row::new();
 
-    row.insert("id", Value::Integer(1));
-    row.insert("name", Value::Text("Alice".into()));
+    row.insert("id", RowValue::Integer(1));
+    row.insert("name", RowValue::Text("Alice".into()));
 
     assert_eq!(
         row.get("id"),
-        Some(&Value::Integer(1))
+        Some(&RowValue::Integer(1))
     );
 
     assert_eq!(
         row.get("name"),
-        Some(&Value::Text("Alice".into()))
+        Some(&RowValue::Text("Alice".into()))
     );
 
     assert_eq!(
@@ -38,7 +38,7 @@ fn test_insert_and_get() {
 fn test_integer_serialization() {
     let mut row = Row::new();
 
-    row.insert("id", Value::Integer(42));
+    row.insert("id", RowValue::Integer(42));
 
     let serialized = row.serialize();
 
@@ -54,7 +54,7 @@ fn test_deserialize_integer() {
 
     assert_eq!(
         row.get("id"),
-        Some(&Value::Integer(10))
+        Some(&RowValue::Integer(10))
     );
 }
 
@@ -64,7 +64,7 @@ fn test_deserialize_text() {
 
     assert_eq!(
         row.get("name"),
-        Some(&Value::Text("Alice".into()))
+        Some(&RowValue::Text("Alice".into()))
     );
 }
 
@@ -72,9 +72,9 @@ fn test_deserialize_text() {
 fn test_mixed_row() {
     let mut row = Row::new();
 
-    row.insert("id", Value::Integer(1));
-    row.insert("name", Value::Text("Alice".into()));
-    row.insert("city", Value::Text("London".into()));
+    row.insert("id", RowValue::Integer(1));
+    row.insert("name", RowValue::Text("Alice".into()));
+    row.insert("city", RowValue::Text("London".into()));
 
     let serialized = row.serialize();
 
@@ -87,9 +87,9 @@ fn test_mixed_row() {
 fn test_serialization_is_sorted() {
     let mut row = Row::new();
 
-    row.insert("z", Value::Integer(1));
-    row.insert("a", Value::Integer(2));
-    row.insert("m", Value::Integer(3));
+    row.insert("z", RowValue::Integer(1));
+    row.insert("a", RowValue::Integer(2));
+    row.insert("m", RowValue::Integer(3));
 
     assert_eq!(
         row.serialize(),
@@ -101,9 +101,9 @@ fn test_serialization_is_sorted() {
 fn test_round_trip() {
     let mut row = Row::new();
 
-    row.insert("id", Value::Integer(100));
-    row.insert("name", Value::Text("Dharmik".into()));
-    row.insert("city", Value::Text("Rajkot".into()));
+    row.insert("id", RowValue::Integer(100));
+    row.insert("name", RowValue::Text("Dharmik".into()));
+    row.insert("city", RowValue::Text("Rajkot".into()));
 
     let serialized = row.serialize();
 
@@ -116,12 +116,12 @@ fn test_round_trip() {
 fn test_overwrite_column() {
     let mut row = Row::new();
 
-    row.insert("id", Value::Integer(1));
-    row.insert("id", Value::Integer(2));
+    row.insert("id", RowValue::Integer(1));
+    row.insert("id", RowValue::Integer(2));
 
     assert_eq!(
         row.get("id"),
-        Some(&Value::Integer(2))
+        Some(&RowValue::Integer(2))
     );
 }
 
@@ -133,20 +133,20 @@ fn test_from_columns() {
             "name".into(),
         ],
         vec![
-            Value::Integer(1),
-            Value::Text("Alice".into()),
+            RowValue::Integer(1),
+            RowValue::Text("Alice".into()),
         ],
     )
     .unwrap();
 
     assert_eq!(
         row.get("id"),
-        Some(&Value::Integer(1))
+        Some(&RowValue::Integer(1))
     );
 
     assert_eq!(
         row.get("name"),
-        Some(&Value::Text("Alice".into()))
+        Some(&RowValue::Text("Alice".into()))
     );
 }
 
@@ -158,7 +158,7 @@ fn test_from_columns_count_mismatch() {
             "name".into(),
         ],
         vec![
-            Value::Integer(1),
+            RowValue::Integer(1),
         ],
     );
 

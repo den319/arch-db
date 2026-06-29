@@ -1,4 +1,4 @@
-use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, Column, TableSchema}, executor::{Executor, QueryResult}, row::Row}};
+use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
 
 fn make_engine() -> Engine {
     Engine::new()
@@ -690,7 +690,7 @@ fn test_update_existing_row() {
     assert_eq!(
         result,
         QueryResult::Message(
-            "1 row updated".into()
+            "Row updated successfully".into()
         )
     );
 
@@ -702,17 +702,17 @@ fn test_update_existing_row() {
         .unwrap();
 
     match stored {
-        crate::engine::Value::Data(data) => {
+        Value::Data(data) => {
             let row = Row::deserialize(&data);
 
             assert_eq!(
                 row.get("name"),
-                Some(&Value::Text("Bob".into()))
+                Some(&RowValue::Text("Bob".into()))
             );
 
             assert_eq!(
                 row.get("id"),
-                Some(&Value::Integer(1))
+                Some(&RowValue::Integer(1))
             );
         }
 
@@ -772,7 +772,7 @@ fn test_update_non_existing_row() {
     assert_eq!(
         result,
         QueryResult::Message(
-            "0 rows updated".into()
+            "Error: row not found".into()
         )
     );
 }
@@ -853,7 +853,7 @@ fn test_update_multiple_columns() {
     assert_eq!(
         result,
         QueryResult::Message(
-            "1 row updated".into()
+            "Row updated successfully".into()
         )
     );
 
@@ -868,12 +868,12 @@ fn test_update_multiple_columns() {
 
             assert_eq!(
                 row.get("name"),
-                Some(&Value::Text("Bob".into()))
+                Some(&RowValue::Text("Bob".into()))
             );
 
             assert_eq!(
                 row.get("city"),
-                Some(&Value::Text("Paris".into()))
+                Some(&RowValue::Text("Paris".into()))
             );
         }
 

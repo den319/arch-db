@@ -1,5 +1,5 @@
 use crate::sql::{
-    ast::{BinaryOperator, Expr}, catalog::TableSchema, row::Row,
+    ast::{BinaryOperator, Expr}, catalog::TableSchema, row::{Row, RowValue},
 };
 
 #[derive(Debug)]
@@ -21,11 +21,11 @@ impl Table {
         let value = row.get(&pk.name)?;
 
         match value {
-            crate::sql::row::Value::Integer(v) => {
+            RowValue::Integer(v) => {
                 Some(v.to_string())
             }
 
-            crate::sql::row::Value::Text(v) => {
+            RowValue::Text(v) => {
                 Some(v.clone())
             }
         }
@@ -46,14 +46,14 @@ impl Table {
 
     pub fn storage_key_from_primary_key(
         &self,
-        value: &crate::sql::row::Value,
+        value: &RowValue,
     ) -> Option<String> {
         // Ensure the table actually has a primary key.
         self.schema.primary_key()?;
 
         let key = match value {
-            crate::sql::row::Value::Integer(v) => v.to_string(),
-            crate::sql::row::Value::Text(v) => v.clone(),
+            RowValue::Integer(v) => v.to_string(),
+            RowValue::Text(v) => v.clone(),
         };
 
         Some(format!("{}:{}", self.schema.name, key))

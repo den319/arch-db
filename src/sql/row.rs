@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub enum RowValue {
     Integer(i64),
     Text(String),
 }
@@ -14,7 +14,7 @@ pub enum RowError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
-    pub values: BTreeMap<String, Value>,
+    pub values: BTreeMap<String, RowValue>,
 }
 
 
@@ -28,19 +28,19 @@ impl Row {
     pub fn insert(
         &mut self,
         column: impl Into<String>,
-        value: Value,
+        value: RowValue,
     ) {
         self.values.insert(column.into(), value);
     }
 
-    pub fn get(&self, column: &str) -> Option<&Value> {
+    pub fn get(&self, column: &str) -> Option<&RowValue> {
         self.values.get(column)
     }
 
     pub fn update(
         &mut self,
         column: &str,
-        value: Value,
+        value: RowValue,
     ) -> Result<(), RowError> {
         match self.values.get_mut(column) {
             Some(existing) => {
@@ -54,7 +54,7 @@ impl Row {
 
     pub fn from_columns(
         columns: Vec<String>,
-        values: Vec<Value>,
+        values: Vec<RowValue>,
     ) -> Result<Self, RowError> {
 
         if columns.len() != values.len() {
@@ -75,8 +75,8 @@ impl Row {
             .iter()
             .map(|(column, value)| {
                 let value = match value {
-                    Value::Integer(i) => format!("i:{}", i),
-                    Value::Text(s) => format!("t:{}", s),
+                    RowValue::Integer(i) => format!("i:{}", i),
+                    RowValue::Text(s) => format!("t:{}", s),
                 };
 
                 format!("{}={}", column, value)
@@ -98,11 +98,11 @@ impl Row {
                 .expect("Invalid row format");
 
             let value = if let Some(v) = value.strip_prefix("i:") {
-                Value::Integer(
+                RowValue::Integer(
                     v.parse().expect("Invalid integer"),
                 )
             } else if let Some(v) = value.strip_prefix("t:") {
-                Value::Text(v.to_string())
+                RowValue::Text(v.to_string())
             } else {
                 panic!("Unknown value type");
             };
