@@ -1,19 +1,18 @@
-use arch_db::{sql::{ast::{ColumnDef, CreateTable, DataType, Expr, Insert, Statement}, catalog::{Catalog, Column, DataType, TableSchema}, executor::{Executor, QueryResult}}, storage::{Storage, SyncPolicy}};
+use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, Column, TableSchema}, executor::{Executor, QueryResult}, row::Row}};
 
-fn make_storage() -> Storage {
-    let dir = std::env::temp_dir().join(format!("exec_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    Storage::new(dir.to_str().unwrap(), SyncPolicy::Never).unwrap()
+fn make_engine() -> Engine {
+    Engine::new()
 }
 
 #[test]
 fn test_execute_create_table() {
     let mut catalog = Catalog::new();
-    let mut storage = make_storage();
+    let mut engine = make_engine();
 
     let mut executor =
         Executor::new(
             &mut catalog,
-            &mut storage,
+            &mut engine,
         );
 
     let stmt = Statement::CreateTable(
@@ -22,11 +21,11 @@ fn test_execute_create_table() {
             columns: vec![
                 ColumnDef {
                     name: "id".into(),
-                    data_type: DataType::Int,
+                    data_type: ast::DataType::Int,
                 },
                 ColumnDef {
                     name: "name".into(),
-                    data_type: DataType::Text,
+                    data_type: ast::DataType::Text,
                 },
             ],
         },
@@ -48,12 +47,12 @@ fn test_execute_create_table() {
 #[test]
 fn test_execute_create_existing_table() {
     let mut catalog = Catalog::new();
-    let mut storage = make_storage();
+    let mut engine = make_engine();
 
     let mut executor =
         Executor::new(
             &mut catalog,
-            &mut storage,
+            &mut engine,
         );
 
     let stmt = Statement::CreateTable(
@@ -87,12 +86,12 @@ fn test_execute_create_existing_table() {
 #[test]
 fn test_execute_dispatch_create_table() {
     let mut catalog = Catalog::new();
-    let mut storage = make_storage();
+    let mut engine = make_engine();
 
     let mut executor =
         Executor::new(
             &mut catalog,
-            &mut storage,
+            &mut engine,
         );
 
     executor.execute(
@@ -106,11 +105,11 @@ fn test_execute_dispatch_create_table() {
 #[test]
 fn test_insert_unknown_table() {
     let mut catalog = Catalog::new();
-    let mut storage= make_storage();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
-        &mut storage,
+        &mut engine,
     );
 
     let stmt = Insert {
@@ -158,12 +157,29 @@ fn test_register_table() {
 #[test]
 fn test_insert_in_table() {
     let mut catalog = Catalog::new();
-    let mut storage= make_storage();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
-        &mut storage,
+        &mut engine,
     );
+
+    // First register the table
+    let create_stmt = Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: ast::DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: ast::DataType::Text,
+            },
+        ],
+    });
+    executor.execute(create_stmt);
+
     let stmt = Insert {
         table_name: "users".into(),
         columns: vec![
@@ -179,4 +195,757 @@ fn test_insert_in_table() {
     let result = executor.execute_insert(stmt);
 
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_select_by_integer_primary_key() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("id".into())),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            }
+        ),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec![
+                "1".into(),
+                "Alice".into(),
+            ]
+        ])
+    );
+}
+
+#[test]
+fn test_select_by_text_primary_key() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "username".into(),
+                data_type: DataType::Text,
+            },
+            ColumnDef {
+                name: "age".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "username".into(),
+            "age".into(),
+        ],
+        values: vec![
+            Expr::String("alice".into()),
+            Expr::Number(25),
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(
+                    Expr::Identifier("username".into())
+                ),
+                op: BinaryOperator::Equal,
+                right: Box::new(
+                    Expr::String("alice".into())
+                ),
+            }
+        ),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec![
+                "25".into(),
+                "alice".into(),
+            ]
+        ])
+    );
+}
+
+#[test]
+fn test_select_missing_table() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(
+                    Expr::Identifier("id".into())
+                ),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            }
+        ),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: table 'users' does not exist".into()
+        )
+    );
+}
+
+#[test]
+fn test_select_missing_row() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(
+                    Expr::Identifier("id".into())
+                ),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            }
+        ),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: row not found".into()
+        )
+    );
+}
+
+#[test]
+fn test_select_without_where_clause() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: SELECT without WHERE is not supported yet".into()
+        )
+    );
+}
+
+#[test]
+fn test_select_with_invalid_where_clause() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(
+            Expr::Identifier("id".into())
+        ),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: unsupported WHERE clause".into()
+        )
+    );
+} 
+
+#[test]
+fn test_delete_existing_row() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+        ],
+    }));
+
+    let result = executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message("Row deleted successfully".into())
+    );
+
+    match executor.engine.get("users:1") {
+        Some(Value::Tombstone) => {}
+        other => panic!("Expected tombstone, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_delete_from_missing_table() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    let result = executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: table 'users' does not exist".into()
+        )
+    );
+}
+
+#[test]
+fn test_delete_without_where_clause() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: DELETE without WHERE is not supported".into()
+        )
+    );
+}
+
+#[test]
+fn test_delete_requires_primary_key() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("name".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::String("Alice".into())),
+        }),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "Error: WHERE must use primary key 'id'".into()
+        )
+    );
+}
+
+#[test]
+fn test_delete_non_existing_row() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(99)),
+        }),
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Message("Row deleted successfully".into())
+    );
+
+    match executor.engine.get("users:99") {
+        Some(Value::Tombstone) => {}
+        other => panic!("Expected tombstone, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_update_existing_row() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(
+        Statement::CreateTable(CreateTable {
+            table_name: "users".into(),
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "name".into(),
+                    data_type: DataType::Text,
+                },
+            ],
+        }),
+    );
+
+    executor.execute(
+        Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+            ],
+            values: vec![
+                Expr::Number(1),
+                Expr::String("Alice".into()),
+            ],
+        }),
+    );
+
+    let result = executor.execute(
+        Statement::Update(Update {
+            table_name: "users".into(),
+            assignments: vec![
+                Assignment {
+                    column: "name".into(),
+                    value: Expr::String("Bob".into()),
+                }
+            ],
+            where_clause: Some(
+                Expr::Binary {
+                    left: Box::new(
+                        Expr::Identifier("id".into())
+                    ),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(
+                        Expr::Number(1)
+                    ),
+                }
+            ),
+        }),
+    );
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "1 row updated".into()
+        )
+    );
+
+    let key = "users:1";
+
+    let stored = executor
+        .engine
+        .get(key)
+        .unwrap();
+
+    match stored {
+        crate::engine::Value::Data(data) => {
+            let row = Row::deserialize(&data);
+
+            assert_eq!(
+                row.get("name"),
+                Some(&Value::Text("Bob".into()))
+            );
+
+            assert_eq!(
+                row.get("id"),
+                Some(&Value::Integer(1))
+            );
+        }
+
+        _ => panic!("expected row"),
+    }
+}
+
+#[test]
+fn test_update_non_existing_row() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(
+        Statement::CreateTable(CreateTable {
+            table_name: "users".into(),
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "name".into(),
+                    data_type: DataType::Text,
+                },
+            ],
+        }),
+    );
+
+    let result = executor.execute(
+        Statement::Update(Update {
+            table_name: "users".into(),
+            assignments: vec![
+                Assignment {
+                    column: "name".into(),
+                    value: Expr::String("Bob".into()),
+                }
+            ],
+            where_clause: Some(
+                Expr::Binary {
+                    left: Box::new(
+                        Expr::Identifier("id".into())
+                    ),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(
+                        Expr::Number(99)
+                    ),
+                }
+            ),
+        }),
+    );
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "0 rows updated".into()
+        )
+    );
+}
+
+#[test]
+fn test_update_multiple_columns() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(
+        Statement::CreateTable(CreateTable {
+            table_name: "users".into(),
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "name".into(),
+                    data_type: DataType::Text,
+                },
+                ColumnDef {
+                    name: "city".into(),
+                    data_type: DataType::Text,
+                },
+            ],
+        }),
+    );
+
+    executor.execute(
+        Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+                "city".into(),
+            ],
+            values: vec![
+                Expr::Number(1),
+                Expr::String("Alice".into()),
+                Expr::String("London".into()),
+            ],
+        }),
+    );
+
+    let result = executor.execute(
+        Statement::Update(Update {
+            table_name: "users".into(),
+            assignments: vec![
+                Assignment {
+                    column: "name".into(),
+                    value: Expr::String("Bob".into()),
+                },
+                Assignment {
+                    column: "city".into(),
+                    value: Expr::String("Paris".into()),
+                },
+            ],
+            where_clause: Some(
+                Expr::Binary {
+                    left: Box::new(
+                        Expr::Identifier("id".into())
+                    ),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(
+                        Expr::Number(1)
+                    ),
+                }
+            ),
+        }),
+    );
+
+    assert_eq!(
+        result,
+        QueryResult::Message(
+            "1 row updated".into()
+        )
+    );
+
+    let stored = executor
+        .engine
+        .get("users:1")
+        .unwrap();
+
+    match stored {
+        Value::Data(data) => {
+            let row = Row::deserialize(&data);
+
+            assert_eq!(
+                row.get("name"),
+                Some(&Value::Text("Bob".into()))
+            );
+
+            assert_eq!(
+                row.get("city"),
+                Some(&Value::Text("Paris".into()))
+            );
+        }
+
+        _ => panic!("expected row"),
+    }
+}
+
+#[test]
+fn test_update_does_not_change_primary_key() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(
+        Statement::CreateTable(CreateTable {
+            table_name: "users".into(),
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "name".into(),
+                    data_type: DataType::Text,
+                },
+            ],
+        }),
+    );
+
+    executor.execute(
+        Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+            ],
+            values: vec![
+                Expr::Number(1),
+                Expr::String("Alice".into()),
+            ],
+        }),
+    );
+
+    let result = executor.execute(
+        Statement::Update(Update {
+            table_name: "users".into(),
+            assignments: vec![
+                Assignment {
+                    column: "id".into(),
+                    value: Expr::Number(2),
+                }
+            ],
+            where_clause: Some(
+                Expr::Binary {
+                    left: Box::new(
+                        Expr::Identifier("id".into())
+                    ),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(
+                        Expr::Number(1)
+                    ),
+                }
+            ),
+        }),
+    );
+
+    match result {
+        QueryResult::Message(_) => {}
+        _ => panic!("unexpected result"),
+    }
 }

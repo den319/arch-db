@@ -328,3 +328,87 @@ fn test_multiple_background_compaction_signals() {
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 }
+
+#[test]
+fn test_put_stores_value() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine
+        .put("name".to_string(), "john".to_string())
+        .unwrap();
+
+    match engine.get("name") {
+        Some(Value::Data(v)) => assert_eq!(v, "john"),
+        _ => panic!("expected value"),
+    }
+}
+
+#[test]
+fn test_get_missing_key_returns_tombstone() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    match engine.get("missing") {
+        Some(Value::Tombstone) => {}
+        _ => panic!("expected tombstone"),
+    }
+}
+
+#[test]
+fn test_delete_marks_key_as_tombstone() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine
+        .put("user".to_string(), "alice".to_string())
+        .unwrap();
+
+    engine
+        .delete("user".to_string())
+        .unwrap();
+
+    match engine.get("user") {
+        Some(Value::Tombstone) => {}
+        _ => panic!("expected tombstone"),
+    }
+}
+
+#[test]
+fn test_delete_nonexistent_key_creates_tombstone() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine
+        .delete("ghost".to_string())
+        .unwrap();
+
+    match engine.get("ghost") {
+        Some(Value::Tombstone) => {}
+        _ => panic!("expected tombstone"),
+    }
+}
+
+#[test]
+fn test_put_overwrites_existing_value() {
+    ensure_counter_initialized();
+
+    let mut engine = Engine::new();
+
+    engine
+        .put("user".to_string(), "alice".to_string())
+        .unwrap();
+
+    engine
+        .put("user".to_string(), "bob".to_string())
+        .unwrap();
+
+    match engine.get("user") {
+        Some(Value::Data(v)) => assert_eq!(v, "bob"),
+        _ => panic!("expected updated value"),
+    }
+}

@@ -79,30 +79,55 @@ impl Engine {
         }
     }
 
+    pub fn put(
+        &mut self,
+        key: String,
+        value: String,
+    ) -> Result<()> {
+        self.memtable.insert(key, Value::Data(value));
+
+        self.maybe_flush()?;
+
+        Ok(())
+    }
+
+    pub fn get(
+        &mut self,
+        key: &str,
+    ) -> Option<Value> {
+        self.get_key(key)
+    }
+
+    pub fn delete(
+        &mut self,
+        key: String,
+    ) -> Result<()> {
+        self.memtable.insert(key, Value::Tombstone);
+
+        self.maybe_flush()?;
+
+        Ok(())
+    }
+
     pub fn execute(&mut self, command:Command) -> Option<String> {
         match command {
             Command::Set(key, val) => {
-                self.memtable.insert(key, Value::Data(val));
-
-                self.maybe_flush().expect("Flush failed!");
-
-
-                Some("OK".to_string())
+                match self.put(key, val) {
+                    Ok(_) => Some("OK".to_string()),
+                    Err(e) => Some(format!("put failed: {}", e)),
+                }
             }
             Command::Get(key) => {
-                self.get_key(&key).map(|v| match v {
-                    Value::Data(d) => {
-                        d                       
-                    },
+                self.get(&key).map(|v| match v {
+                    Value::Data(d) => d,
                     Value::Tombstone => "Key not found!".to_string(),
                 })
             }
             Command::Del(key) => {
-                self.memtable.insert(key, Value::Tombstone);
-
-                self.maybe_flush().expect("Flush failed!");
-
-                Some("Deleted".to_string())
+                match self.delete(key) {
+                    Ok(_) => Some("Deleted".to_string()),
+                    Err(e) => Some(format!("delete failed: {}", e)),
+                }
             }
             Command::Exit => {
                 if self.memtable_size() > 0 {

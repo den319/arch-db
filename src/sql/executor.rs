@@ -1,4 +1,4 @@
-use crate::{error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, Value}, table::Table}, storage::Storage};
+use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, Value}, table::Table}};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -16,18 +16,18 @@ pub enum ExecutionResult {
 
 pub struct Executor<'a> {
     pub catalog: &'a mut Catalog,
-    pub storage: &'a mut Storage,
+    pub engine: &'a mut Engine,
 }
 
 
 impl<'a> Executor<'a> {
     pub fn new(
         catalog: &'a mut Catalog,
-        storage: &'a mut Storage,
+        engine: &'a mut Engine,
     ) -> Self {
         Self {
             catalog,
-            storage,
+            engine,
         }
     }
 
@@ -44,7 +44,9 @@ impl<'a> Executor<'a> {
                 }),
 
             Statement::Insert(statement) =>
-                self.execute_insert(statement),
+                self.execute_insert(statement).unwrap_or_else(|e| {
+                    QueryResult::Message(format!("Error: {}", e))
+                }),
 
             Statement::Select(statement) =>
                 self.execute_select(statement),
@@ -57,6 +59,21 @@ impl<'a> Executor<'a> {
         }
     }
 
+    fn expr_to_value(
+        &self,
+        expr: Expr,
+    ) -> Result<Value> {
+        match expr {
+            Expr::Number(n) => Ok(Value::Integer(n)),
+
+            Expr::String(s) => Ok(Value::Text(s)),
+
+            _ => Err(DatabaseError::Other(
+                "unsupported expression".into(),
+            )),
+        }
+    }
+
     pub fn execute_create_table(
         &mut self,
         stmt: CreateTable,
@@ -65,11 +82,12 @@ impl<'a> Executor<'a> {
         let columns = stmt
             .columns
             .into_iter()
-            .map(|column| Column {
+            .enumerate()
+            .map(|(i, column)| Column {
                 name: column.name,
                 data_type: column.data_type.into(),
-                primary_key: false,
-                nullable: true,
+                primary_key: i == 0,
+                nullable: !(i == 0),
             })
             .collect();
 
@@ -79,7 +97,7 @@ impl<'a> Executor<'a> {
         };
 
         self.catalog.create_table(schema)
-            .map_err(|e| DatabaseError::Other(e))?;
+            .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
 
         Ok(QueryResult::Message(
             "Table created successfully".into(),
@@ -103,28 +121,28 @@ impl<'a> Executor<'a> {
         let mut values = Vec::new();
 
         for expr in stmt.values {
-            let value = match expr {
-                Expr::Number(n) => Value::Integer(n),
-
-                Expr::String(s) => Value::Text(s),
-
-                _ => {
-                    return Err(DatabaseError::Other(
-                        "unsupported expression".into(),
-                    ));
-                }
-            };
-
-            values.push(value);
+            values.push(self.expr_to_value(expr)?);
         }
 
         let row = Row::from_columns(
             stmt.columns,
             values,
         )
-        .map_err(|e| DatabaseError::Other(e))?;
+        .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
 
-        println!("{:#?}", row);
+        let key = table
+            .storage_key(&row)
+            .ok_or(DatabaseError::Other(
+                "missing primary key".into(),
+            ))?;
+
+        println!("row: {:#?}", row);
+        println!("storage key = {}", key);
+
+        let bytes = row.serialize();
+
+        self.engine
+            .put(key, bytes)?;
 
         Ok(QueryResult::Message(
             "Insert parsed successfully".into(),
@@ -135,20 +153,240 @@ impl<'a> Executor<'a> {
         &mut self,
         stmt: Select,
     ) -> QueryResult {
-        todo!()
+
+        let result = (|| -> Result<QueryResult> {
+
+            // Lookup schema
+            let schema = self
+                .catalog
+                .table(&stmt.table_name)
+                .ok_or(DatabaseError::Other(
+                    format!(
+                        "table '{}' does not exist",
+                        stmt.table_name
+                    ),
+                ))?
+                .clone();
+
+            let table = Table::new(schema);
+
+            // For now we only support:
+            // WHERE <primary_key> = <literal>
+            let where_clause = stmt
+                .where_clause
+                .ok_or(DatabaseError::Other(
+                    "SELECT without WHERE is not supported yet".into(),
+                ))?;
+
+            let storage_key = match where_clause {
+
+                Expr::Binary {
+                    left,
+                    op: _,
+                    right,
+                } => {
+
+                    match (*left, *right) {
+
+                        (Expr::Identifier(_), value_expr) => {
+
+                            let value = self.expr_to_value(value_expr)?;
+
+                            table
+                                .storage_key_from_primary_key(&value)
+                                .ok_or(DatabaseError::Other(
+                                    "missing primary key".into(),
+                                ))?
+                        }
+
+                        _ => {
+                            return Err(DatabaseError::Other(
+                                "unsupported WHERE clause".into(),
+                            ));
+                        }
+                    }
+                }
+
+                _ => {
+                    return Err(DatabaseError::Other(
+                        "unsupported WHERE clause".into(),
+                    ));
+                }
+            };
+
+            let value = self
+                .engine
+                .get(&storage_key)
+                .ok_or(DatabaseError::Other(
+                    "row not found".into(),
+                ))?;
+
+            match value {
+
+                crate::engine::Value::Data(serialized) => {
+
+                    let row = Row::deserialize(&serialized);
+
+                    let result = row
+                        .values
+                        .into_values()
+                        .map(|value| match value {
+                            Value::Integer(v) => v.to_string(),
+                            Value::Text(v) => v,
+                        })
+                        .collect::<Vec<_>>();
+
+                    Ok(QueryResult::Rows(vec![result]))
+                }
+
+                crate::engine::Value::Tombstone => {
+                    Err(DatabaseError::Other(
+                        "row not found".into(),
+                    ))
+                }
+            }
+
+        })();
+
+        result.unwrap_or_else(|e| {
+            QueryResult::Message(format!("Error: {}", e))
+        })
     }
 
     pub fn execute_delete(
         &mut self,
         stmt: Delete,
     ) -> QueryResult {
-        todo!()
+        let schema = match self.catalog.table(&stmt.table_name) {
+            Some(schema) => schema.clone(),
+            None => {
+                return QueryResult::Message(format!(
+                    "Error: table '{}' does not exist",
+                    stmt.table_name
+                ));
+            }
+        };
+
+        let table = Table::new(schema);
+
+        let where_clause = match stmt.where_clause {
+            Some(expr) => expr,
+            None => {
+                return QueryResult::Message(
+                    "Error: DELETE without WHERE is not supported".into(),
+                );
+            }
+        };
+
+        let key = match table.storage_key_from_expr(&where_clause) {
+            Ok(key) => key,
+            Err(err) => {
+                return QueryResult::Message(format!("Error: {}", err));
+            }
+        };
+
+        match self.engine.delete(key) {
+            Ok(_) => QueryResult::Message(
+                "Row deleted successfully".into(),
+            ),
+            Err(err) => QueryResult::Message(format!(
+                "Error: {}",
+                err
+            )),
+        }
     }
 
     pub fn execute_update(
         &mut self,
         stmt: Update,
     ) -> QueryResult {
-        todo!()
+        // Check table exists
+        let schema = match self.catalog.table(&stmt.table_name) {
+            Some(schema) => schema.clone(),
+            None => {
+                return QueryResult::Message(format!(
+                    "Error: table '{}' does not exist",
+                    stmt.table_name
+                ));
+            }
+        };
+
+        let table = Table::new(schema.clone());
+
+        // Require WHERE clause
+        let where_clause = match stmt.where_clause {
+            Some(expr) => expr,
+            None => {
+                return QueryResult::Message(
+                    "Error: UPDATE without WHERE is not supported".into(),
+                );
+            }
+        };
+
+        // Build storage key from WHERE
+        let key = match table.storage_key_from_expr(&where_clause) {
+            Ok(key) => key,
+            Err(err) => {
+                return QueryResult::Message(format!("Error: {}", err));
+            }
+        };
+
+        // Read existing row
+        let row_data = match self.engine.get(&key) {
+            Some(crate::engine::Value::Data(data)) => data,
+            _ => {
+                return QueryResult::Message(
+                    "Error: row not found".into(),
+                );
+            }
+        };
+
+        // Deserialize
+        let mut row = Row::deserialize(&row_data);
+
+        // Primary key name
+        let pk_name = schema
+            .primary_key()
+            .expect("table should have a primary key")
+            .name
+            .clone();
+
+        // Apply assignments
+        for assignment in stmt.assignments {
+            // Don't allow PK updates
+            if assignment.column == pk_name {
+                return QueryResult::Message(
+                    "Error: updating the primary key is not supported".into(),
+                );
+            }
+
+            let value = match assignment.value {
+                Expr::Number(n) => Value::Integer(n),
+                Expr::String(s) => Value::Text(s),
+                _ => {
+                    return QueryResult::Message(
+                        "Error: unsupported expression".into(),
+                    );
+                }
+            };
+
+            if let Err(_) = row.update(&assignment.column, value) {
+                return QueryResult::Message(format!(
+                    "Error: unknown column '{}'",
+                    assignment.column
+                ));
+            }
+        }
+
+        // Write updated row
+        let serialized = row.serialize();
+
+        if let Err(err) = self.engine.put(key, serialized) {
+            return QueryResult::Message(format!("Error: {}", err));
+        }
+
+        QueryResult::Message(
+            "Row updated successfully".into(),
+        )
     }
 }

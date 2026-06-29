@@ -9,6 +9,7 @@ pub enum Value {
 #[derive(Debug, PartialEq)]
 pub enum RowError {
     ColumnValueCountMismatch,
+    UnknownColumn,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,21 @@ impl Row {
 
     pub fn get(&self, column: &str) -> Option<&Value> {
         self.values.get(column)
+    }
+
+    pub fn update(
+        &mut self,
+        column: &str,
+        value: Value,
+    ) -> Result<(), RowError> {
+        match self.values.get_mut(column) {
+            Some(existing) => {
+                *existing = value;
+                Ok(())
+            }
+
+            None => Err(RowError::UnknownColumn),
+        }
     }
 
     pub fn from_columns(
