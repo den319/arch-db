@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use crate::sql::{
-    ast::{BinaryOperator, Expr}, catalog::TableSchema, row::{Row, RowValue},
+    ast::{BinaryOperator, DataType, Expr}, catalog::TableSchema, row::{Row, RowValue},
 };
 
 #[derive(Debug)]
@@ -43,6 +45,31 @@ impl Table {
             pk
         ))
     }
+
+    // pub fn decode_row(
+    //     &self,
+    //     value: &str,
+    // ) -> Row {
+    //     let mut values = BTreeMap::new();
+
+    //     let parts: Vec<&str> = value.split('|').collect();
+
+    //     for (column, raw) in self.columns.iter().zip(parts.iter()) {
+    //         let value = match column.data_type {
+    //             DataType::Int => {
+    //                 RowValue::Integer(raw.parse().unwrap())
+    //             }
+
+    //             DataType::Text => {
+    //                 RowValue::Text(raw.to_string())
+    //             }
+    //         };
+
+    //         values.insert(column.name.clone(), value);
+    //     }
+
+    //     Row { values }
+    // }
 
     pub fn storage_key_from_primary_key(
         &self,

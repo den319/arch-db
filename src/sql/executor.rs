@@ -1,4 +1,4 @@
-use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, TableSchema}, row::{Row, RowValue}, table::Table}};
+use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -212,38 +212,55 @@ impl<'a> Executor<'a> {
                 let rows = match self.scan_table(&stmt.table_name) {
                     Ok(rows) => rows,
                     Err(e) => {
-                        return QueryResult::Message(format!("Error: {}", e));
+                        return Ok(QueryResult::Message(format!("Error: {}", e)));
                     }
                 };
 
-                let mut result = Vec::new();
+                let mut result: Vec<Vec<String>> = Vec::new();
 
                 for row in rows {
 
                     let mut values = Vec::new();
 
                     for column in &stmt.columns {
-
-                        match row.get(column) {
-
-                            Some(RowValue::Integer(i)) => {
-                                values.push(i.to_string());
+                        match column {
+                            SelectItem::Wildcard => {
+                                for (_, val) in &row.values {
+                                    match val {
+                                        RowValue::Integer(i) => values.push(i.to_string()),
+                                        RowValue::Text(s) => values.push(s.clone()),
+                                    }
+                                }
                             }
-
-                            Some(RowValue::Text(s)) => {
-                                values.push(s.clone());
-                            }
-
-                            None => {
-                                values.push("NULL".into());
+                            SelectItem::Column(col_name) => {
+                                match row.get(col_name) {
+                                    Some(RowValue::Integer(i)) => {
+                                        values.push(i.to_string());
+                                    }
+                                    Some(RowValue::Text(s)) => {
+                                        values.push(s.clone());
+                                    }
+                                    None => {
+                                        values.push("NULL".into());
+                                    }
+                                }
                             }
                         }
                     }
 
+                        if let Some(expr) = &stmt.where_clause {
+                            if !ExpressionEvaluator::evaluate(
+                                &row,
+                                expr,
+                            )? {
+                                continue;
+                            }
+                        }
+
                     result.push(values);
                 }
 
-                return QueryResult::Rows(result);
+                    return Ok(QueryResult::Rows(result));
             }
 
             // For now we only support:

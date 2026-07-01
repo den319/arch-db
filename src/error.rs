@@ -22,4 +22,16 @@ impl From<Error> for DatabaseError {
     }
 }
 
+impl From<&str> for DatabaseError {
+    fn from(msg: &str) -> Self {
+        DatabaseError::Other(msg.to_string())
+    }
+}
+
+impl From<String> for DatabaseError {
+    fn from(msg: String) -> Self {
+        DatabaseError::Other(msg)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, DatabaseError>;

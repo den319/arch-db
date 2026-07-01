@@ -4,6 +4,7 @@ fn make_engine() -> Engine {
     Engine::new()
 }
 
+
 #[test]
 fn test_execute_create_table() {
     let mut catalog = Catalog::new();
@@ -222,7 +223,7 @@ fn test_select_by_integer_primary_key() {
         table_name: "users".into(),
         columns: vec!["id".into(), "name".into()],
         values: vec![
-            Expr::Number(1),
+            Expr::Number(1),    
             Expr::String("Alice".into()),
         ],
     }));
@@ -403,9 +404,7 @@ fn test_select_without_where_clause() {
 
     assert_eq!(
         result,
-        QueryResult::Message(
-            "Error: SELECT without WHERE is not supported yet".into()
-        )
+        QueryResult::Rows(vec![])
     );
 }
 
@@ -948,4 +947,304 @@ fn test_update_does_not_change_primary_key() {
         QueryResult::Message(_) => {}
         _ => panic!("unexpected result"),
     }
+}
+
+#[test]
+fn test_select_all_rows() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Alice".into()],
+            vec!["2".into(), "Bob".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_select_single_column_scan() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Column("name".into())],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["Alice".into()],
+            vec!["Bob".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_select_empty_table_scan() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![])
+    );
+}
+
+#[test]
+fn test_scan_only_requested_table() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "orders".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "item".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "orders".into(),
+        columns: vec!["id".into(), "item".into()],
+        values: vec![Expr::Number(1), Expr::String("Laptop".into())],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Alice".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_scan_after_delete() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+    }));
+
+    executor.execute(Statement::Delete(Delete {
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["2".into(), "Bob".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_scan_after_update() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![Assignment {
+            column: "name".into(),
+            value: Expr::String("Charlie".into()),
+        }],
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Charlie".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_scan_returns_rows_in_key_order() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(3), Expr::String("Charlie".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Alice".into()],
+            vec!["2".into(), "Bob".into()],
+            vec!["3".into(), "Charlie".into()],
+        ])
+    );
 }

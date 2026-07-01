@@ -6,3 +6,4 @@ pub mod executor;
 pub mod catalog;
 pub mod row;
 pub mod table;
+pub mod expression;
