@@ -2,6 +2,7 @@ use std::{collections::{BTreeMap, HashMap}, fs::{self, File, OpenOptions}, io::{
 
 use crate::{bloom_filter::BloomFilter, compaction_picker::{CompactionCandidate, CompactionPicker}, engine::Value, error::Result, merge_iterator::MergeIterator, sstable::{SSTableIndex, SSTableIterator, SSTableWriter, load_bloom_from_footer, load_index_from_footer, read_sstable, search_sstable, write_sstable}};
 
+use crate::storage_iterator::StorageIterator;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Level {
@@ -437,17 +438,16 @@ impl SSTableManager {
         output_level: Level,
         drop_tombstones: bool,
     ) -> Result<Vec<CreatedTable>> {
-        let mut iters = Vec::new();
+        let mut iters: Vec<Box<dyn StorageIterator>> = Vec::new();
 
         for table in tables {
-            iters.push(
+            iters.push(Box::new(
                 SSTableIterator::new(
                     &table.path,
                     table.index.clone(),
                 )?
-            );
+            ));
         }
-
         let mut merge =
             MergeIterator::new(
                 iters,

@@ -10,7 +10,7 @@ use arch_db::helper::unique_file;
 
 /// Initialize the global SSTABLE_COUNTER exactly once across all parallel tests,
 /// ensuring no test creates files that collide with each other or with user data.
-fn ensure_counter_initialized() {
+pub fn ensure_counter_initialized() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
         init_sstable_counter();

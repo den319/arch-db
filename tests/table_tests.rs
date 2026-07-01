@@ -1,4 +1,4 @@
-use arch_db::sql::{catalog::{Column, DataType, TableSchema}, row::{Row, RowValue}, table::Table};
+use arch_db::sql::{catalog::{CatalogDataType, Column, TableSchema}, row::{Row, RowValue}, table::Table};
 
 #[test]
 fn test_primary_key_integer() {
@@ -7,13 +7,13 @@ fn test_primary_key_integer() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
             Column {
                 name: "name".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },
@@ -44,7 +44,7 @@ fn test_primary_key_text() {
         columns: vec![
             Column {
                 name: "username".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: true,
                 nullable: false,
             },
@@ -74,7 +74,7 @@ fn test_storage_key() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
@@ -104,7 +104,7 @@ fn test_no_primary_key() {
         columns: vec![
             Column {
                 name: "name".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },
@@ -134,13 +134,13 @@ fn test_missing_primary_key_value() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
             Column {
                 name: "name".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },
@@ -170,7 +170,7 @@ fn test_storage_key_without_primary_key() {
         columns: vec![
             Column {
                 name: "name".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },
@@ -200,13 +200,13 @@ fn test_storage_key_from_integer_primary_key() {
         columns: vec![
             Column {
                 name: "id".to_string(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
             Column {
                 name: "name".to_string(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: true,
             },
@@ -232,7 +232,7 @@ fn test_storage_key_from_text_primary_key() {
         columns: vec![
             Column {
                 name: "username".to_string(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: true,
                 nullable: false,
             },
@@ -258,7 +258,7 @@ fn test_storage_key_without_primary_key_returns_none() {
         columns: vec![
             Column {
                 name: "id".to_string(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: false,
                 nullable: true,
             },

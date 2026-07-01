@@ -1,4 +1,4 @@
-use arch_db::sql::catalog::{Catalog, Column, DataType, TableSchema};
+use arch_db::sql::catalog::{Catalog, CatalogDataType, Column, TableSchema};
 
 #[test]
 fn create_table() {
@@ -9,7 +9,7 @@ fn create_table() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             }
@@ -56,13 +56,13 @@ fn primary_key_lookup() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
             Column {
                 name: "name".into(),
-                data_type: DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },

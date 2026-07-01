@@ -1,8 +1,24 @@
-use std::{cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, sync::{Arc, Mutex, mpsc::{self, Sender}}, thread};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BinaryHeap, HashMap},
+    fs,
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Sender},
+    },
+    thread,
+};
 
-use crate::{bloom_filter::BloomFilter, cache::CacheKey, command::Command, compaction_picker::CompactionPicker, error::Result, sstable::{binary_search_block, find_block, read_block, read_sstable, write_sstable}, sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id}};
-use crate::cache::BlockCache;
-
+use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage_iterator::StorageIterator};
+use crate::{
+    bloom_filter::BloomFilter,
+    cache::CacheKey,
+    command::Command,
+    compaction_picker::CompactionPicker,
+    error::Result,
+    sstable::{binary_search_block, find_block, read_block, read_sstable, write_sstable},
+    sstable_manager::{Level, SSTable, SSTableManager, next_sstable_id},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Value {
@@ -22,7 +38,7 @@ pub struct Engine {
 pub struct HeapItem {
     key: String,
     val: Value,
-    source_idx:usize, 
+    source_idx: usize,
 }
 
 impl Eq for HeapItem {}
@@ -45,28 +61,25 @@ impl PartialOrd for HeapItem {
     }
 }
 
-
-
 impl Engine {
     pub fn new() -> Self {
-        let (tx, rx)= mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<()>();
 
-        let shared_sstables= Arc::new(Mutex::new(SSTableManager::new()));
+        let shared_sstables = Arc::new(Mutex::new(SSTableManager::new()));
 
-        let worker_sstables= Arc::clone(&shared_sstables);
+        let worker_sstables = Arc::clone(&shared_sstables);
 
         thread::spawn(move || {
             while let Ok(_) = rx.recv() {
                 println!("[Background Worker] Compaction started");
 
-                let mut sstables= worker_sstables.lock().unwrap();
+                let mut sstables = worker_sstables.lock().unwrap();
 
-                if let Err(e)= sstables.maybe_compact() {
-                    println!("[Background Worker] Compaction error: {}",e);
+                if let Err(e) = sstables.maybe_compact() {
+                    println!("[Background Worker] Compaction error: {}", e);
                 }
 
-                    println!("[Background Worker] Compaction finished");
-
+                println!("[Background Worker] Compaction finished");
             }
         });
 
@@ -79,11 +92,7 @@ impl Engine {
         }
     }
 
-    pub fn put(
-        &mut self,
-        key: String,
-        value: String,
-    ) -> Result<()> {
+    pub fn put(&mut self, key: String, value: String) -> Result<()> {
         self.memtable.insert(key, Value::Data(value));
 
         self.maybe_flush()?;
@@ -91,17 +100,11 @@ impl Engine {
         Ok(())
     }
 
-    pub fn get(
-        &mut self,
-        key: &str,
-    ) -> Option<Value> {
+    pub fn get(&mut self, key: &str) -> Option<Value> {
         self.get_key(key)
     }
 
-    pub fn delete(
-        &mut self,
-        key: String,
-    ) -> Result<()> {
+    pub fn delete(&mut self, key: String) -> Result<()> {
         self.memtable.insert(key, Value::Tombstone);
 
         self.maybe_flush()?;
@@ -109,26 +112,20 @@ impl Engine {
         Ok(())
     }
 
-    pub fn execute(&mut self, command:Command) -> Option<String> {
+    pub fn execute(&mut self, command: Command) -> Option<String> {
         match command {
-            Command::Set(key, val) => {
-                match self.put(key, val) {
-                    Ok(_) => Some("OK".to_string()),
-                    Err(e) => Some(format!("put failed: {}", e)),
-                }
-            }
-            Command::Get(key) => {
-                self.get(&key).map(|v| match v {
-                    Value::Data(d) => d,
-                    Value::Tombstone => "Key not found!".to_string(),
-                })
-            }
-            Command::Del(key) => {
-                match self.delete(key) {
-                    Ok(_) => Some("Deleted".to_string()),
-                    Err(e) => Some(format!("delete failed: {}", e)),
-                }
-            }
+            Command::Set(key, val) => match self.put(key, val) {
+                Ok(_) => Some("OK".to_string()),
+                Err(e) => Some(format!("put failed: {}", e)),
+            },
+            Command::Get(key) => self.get(&key).map(|v| match v {
+                Value::Data(d) => d,
+                Value::Tombstone => "Key not found!".to_string(),
+            }),
+            Command::Del(key) => match self.delete(key) {
+                Ok(_) => Some("Deleted".to_string()),
+                Err(e) => Some(format!("delete failed: {}", e)),
+            },
             Command::Exit => {
                 if self.memtable_size() > 0 {
                     let sstable_id = next_sstable_id();
@@ -137,13 +134,12 @@ impl Engine {
                         return Some(format!("flush failed: {}", e));
                     }
                 }
-                
+
                 let mut sstables = self.sstables.lock().unwrap();
                 match sstables.compact() {
                     Ok(_) => Some("Bye!".to_string()),
                     Err(e) => Some(format!("compaction failed: {}", e)),
                 }
-                
             }
             Command::Compact => {
                 if self.memtable_size() > 0 {
@@ -160,62 +156,61 @@ impl Engine {
                 }
             }
             Command::Scan(start, end) => {
-                let result= self.scan(&start, &end);
+                let result = self.scan(&start, &end);
 
                 Some(format!("{:?}", result))
             }
 
-            Command::Invalid => {
-                Some("Invalid command!".to_string())
-            }
+            Command::Invalid => Some("Invalid command!".to_string()),
         }
     }
 
-    pub fn snapshot(&self)-> Vec<(String, Value)> {
-        self.memtable.iter().map(|(k,v)| (k.clone(), v.clone())).collect()
+    pub fn snapshot(&self) -> Vec<(String, Value)> {
+        self.memtable
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
-    pub fn flush_to_sstable(&mut self, path:&str) -> Result<()> {
-        let data= self.snapshot();
+    pub fn flush_to_sstable(&mut self, path: &str) -> Result<()> {
+        let data = self.snapshot();
         if data.is_empty() {
             // skip SSTable creation
-            return Ok(()); 
+            return Ok(());
         }
 
         let size = data.len().max(8) as u32;
         let mut bloom = BloomFilter::with_rate(0.01, size);
-        
+
         for (key, _) in &data {
             bloom.insert(key);
         }
-        let index=  write_sstable(path, &data)?;
+        let index = write_sstable(path, &data)?;
 
-        let min_key= data.first().map(|(k, _)|k.clone()).unwrap();
-        let max_key= data.last().map(|(k, _)|k.clone()).unwrap();
-        let file_size= fs::metadata(&path)?.len();
+        let min_key = data.first().map(|(k, _)| k.clone()).unwrap();
+        let max_key = data.last().map(|(k, _)| k.clone()).unwrap();
+        let file_size = fs::metadata(&path)?.len();
 
         {
             let mut sstables = self.sstables.lock().unwrap();
-            sstables.add_table(
-                SSTable {
-                    path: path.to_string(),
-                    index,
-                    bloom,
-                    level: Level::L0,
-                    max_key,
-                    min_key,
-                    file_size
-                }
-            );
+            sstables.add_table(SSTable {
+                path: path.to_string(),
+                index,
+                bloom,
+                level: Level::L0,
+                max_key,
+                min_key,
+                file_size,
+            });
         }
 
         let mut sstables = self.sstables.lock().unwrap();
         if let Some(candidate) = CompactionPicker::pick_l0(&sstables) {
             sstables.size_tiered_compact_l0(&candidate)?;
         }
-        
+
         self.memtable.clear();
-        let _= self.compaction_tx.send(());
+        let _ = self.compaction_tx.send(());
 
         Ok(())
     }
@@ -223,10 +218,9 @@ impl Engine {
     /// Lock briefly to check bloom filters (fast, memory-only) and
     /// collect candidates. Then release the lock before any disk I/O,
     /// so the background compaction worker is not blocked.
-    pub fn get_key(&mut self, key:&str) -> Option<Value> {
-
+    pub fn get_key(&mut self, key: &str) -> Option<Value> {
         println!("GET KEY: {:?}", key);
-        if let Some(val)= self.memtable.get(key) {
+        if let Some(val) = self.memtable.get(key) {
             return Some(val.clone());
         }
 
@@ -236,19 +230,25 @@ impl Engine {
 
             let mut v: Vec<(String, crate::sstable::SSTableIndex)> = Vec::new();
             for t in sstables.l0.iter().rev() {
-                if !t.contains_key_range(key) { continue; }
+                if !t.contains_key_range(key) {
+                    continue;
+                }
                 if t.bloom.contains(&key) {
                     v.push((t.path.clone(), t.index.clone()));
                 }
             }
             for t in sstables.l1.iter().rev() {
-                if !t.contains_key_range(key) { continue; }
+                if !t.contains_key_range(key) {
+                    continue;
+                }
                 if t.bloom.contains(&key) {
                     v.push((t.path.clone(), t.index.clone()));
                 }
             }
             for t in sstables.l2.iter().rev() {
-                if !t.contains_key_range(key) { continue; }
+                if !t.contains_key_range(key) {
+                    continue;
+                }
                 if t.bloom.contains(&key) {
                     v.push((t.path.clone(), t.index.clone()));
                 }
@@ -266,7 +266,12 @@ impl Engine {
         Some(Value::Tombstone)
     }
 
-    pub fn search_one(path: &str, index: &crate::sstable::SSTableIndex, key:&str, cache: &mut BlockCache) -> Option<Value> {
+    pub fn search_one(
+        path: &str,
+        index: &crate::sstable::SSTableIndex,
+        key: &str,
+        cache: &mut BlockCache,
+    ) -> Option<Value> {
         println!("checking SSTable: {}", path);
 
         let block = match find_block(index, key) {
@@ -299,12 +304,11 @@ impl Engine {
         cache.insert(cache_key, records.clone());
 
         return binary_search_block(&records, key);
-
     }
 
     pub fn maybe_flush(&mut self) -> Result<()> {
         if self.memtable.len() >= self.memtable_limit {
-            let path = format!("sst_l0_{}.bin",next_sstable_id());
+            let path = format!("sst_l0_{}.bin", next_sstable_id());
             self.flush_to_sstable(&path)?;
         }
         Ok(())
@@ -314,14 +318,18 @@ impl Engine {
         self.memtable.len()
     }
 
-    pub fn scan(&self, start:&str, end:&str) -> Vec<(String, Value)> {
-        let mut sources:Vec<Vec<(String, Value)>>= Vec::new();
-        let mem_data:Vec<(String, Value)>= self.memtable.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+    pub fn scan(&self, start: &str, end: &str) -> Vec<(String, Value)> {
+        let mut sources: Vec<Vec<(String, Value)>> = Vec::new();
+        let mem_data: Vec<(String, Value)> = self
+            .memtable
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         sources.push(mem_data);
 
         let sstables = self.sstables.lock().unwrap();
         for table in &sstables.l0 {
-            let data= read_sstable(&table.path).expect("Scan of L0 Failed!");
+            let data = read_sstable(&table.path).expect("Scan of L0 Failed!");
             sources.push(data);
         }
         for table in &sstables.l1 {
@@ -333,32 +341,74 @@ impl Engine {
             sources.push(data);
         }
 
-        let mut heap= BinaryHeap::new();
-        let mut positions= vec![0usize; sources.len()];
+        let mut heap = BinaryHeap::new();
+        let mut positions = vec![0usize; sources.len()];
 
         for (src_idx, source) in sources.iter().enumerate() {
-            if let Some((k,v))= source.first() {
-                heap.push(HeapItem { key: k.clone(), val: v.clone(), source_idx: src_idx });
+            if let Some((k, v)) = source.first() {
+                heap.push(HeapItem {
+                    key: k.clone(),
+                    val: v.clone(),
+                    source_idx: src_idx,
+                });
             }
         }
 
-        let mut merged: HashMap<String, Value>= HashMap::new();
+        let mut merged: HashMap<String, Value> = HashMap::new();
 
-        while let Some(item)= heap.pop() {
+        while let Some(item) = heap.pop() {
             if item.key.as_str() >= start && item.key.as_str() < end {
                 merged.entry(item.key.clone()).or_insert(item.val.clone());
             }
-            let src= item.source_idx;
+            let src = item.source_idx;
             positions[src] += 1;
-            if let Some((k,v)) = sources[src].get(positions[src]) {
-                heap.push(HeapItem { key: k.clone(), val: v.clone(), source_idx: src });
+            if let Some((k, v)) = sources[src].get(positions[src]) {
+                heap.push(HeapItem {
+                    key: k.clone(),
+                    val: v.clone(),
+                    source_idx: src,
+                });
             }
         }
 
-        let mut result:Vec<_>= merged.into_iter().filter(|(_,v)| matches!(v, Value::Data(_))).collect();
-        result.sort_by(|a,b| a.0.cmp(&b.0));
+        let mut result: Vec<_> = merged
+            .into_iter()
+            .filter(|(_, v)| matches!(v, Value::Data(_)))
+            .collect();
+        result.sort_by(|a, b| a.0.cmp(&b.0));
         result
     }
-    
-}
 
+    pub fn iter(&mut self) -> Result<EngineIterator> {
+        let mut iterators: Vec<Box<dyn StorageIterator>> = Vec::new();
+
+        iterators.push(Box::new(MemtableIterator::new(&self.memtable)));
+
+        let sstables = self.sstables.lock().unwrap();
+
+        for table in &sstables.l0 {
+            iterators.push(Box::new(SSTableIterator::new(
+                &table.path,
+                table.index.clone(),
+            )?));
+        }
+
+        for table in &sstables.l1 {
+            iterators.push(Box::new(SSTableIterator::new(
+                &table.path,
+                table.index.clone(),
+            )?));
+        }
+
+        for table in &sstables.l2 {
+            iterators.push(Box::new(SSTableIterator::new(
+                &table.path,
+                table.index.clone(),
+            )?));
+        }
+
+        let merge = MergeIterator::new(iterators, false)?;
+
+        Ok(EngineIterator::new(merge))
+    }
+}

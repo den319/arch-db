@@ -1,9 +1,9 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use crate::{engine::Value, error::Result, sstable::{BlockRecord, SSTableIterator}};
+use crate::{engine::Value, error::Result, sstable::{BlockRecord, SSTableIterator}, storage_iterator::StorageIterator};
 
 pub struct MergeIterator {
-    iters: Vec<SSTableIterator>,
+    iters: Vec<Box<dyn StorageIterator>>,
     heap: BinaryHeap<HeapItem>,
     drop_tombstones: bool,
 }
@@ -35,7 +35,7 @@ impl PartialOrd for HeapItem {
 }
 
 impl MergeIterator {
-    pub fn new(mut iters: Vec<SSTableIterator>, drop_tombstones: bool) -> Result<Self> {
+    pub fn new(mut iters: Vec<Box<dyn StorageIterator>>, drop_tombstones: bool) -> Result<Self> {
         let mut heap= BinaryHeap::new();
 
         for(iter_index, iter) in iters.iter_mut().enumerate() {

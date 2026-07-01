@@ -12,3 +12,6 @@ pub mod schema;
 pub mod sql;
 pub mod merge_iterator;
 pub mod compaction_picker;
+pub mod storage_iterator;
+pub mod memtable_iterator;
+pub mod engine_iterator;

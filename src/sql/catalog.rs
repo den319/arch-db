@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::sql::ast;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DataType {
+pub enum CatalogDataType {
     Integer,
     Text,
 }
@@ -11,7 +11,7 @@ pub enum DataType {
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
-    pub data_type: DataType,
+    pub data_type: CatalogDataType,
     pub primary_key: bool,
     pub nullable: bool,
 }
@@ -36,11 +36,11 @@ impl TableSchema {
     }
 }
 
-impl From<ast::DataType> for DataType {
+impl From<ast::DataType> for CatalogDataType {
     fn from(value: ast::DataType) -> Self {
         match value {
-            ast::DataType::Int => DataType::Integer,
-            ast::DataType::Text => DataType::Text,
+            ast::DataType::Int => CatalogDataType::Integer,
+            ast::DataType::Text => CatalogDataType::Text,
         }
     }
 }

@@ -1,4 +1,4 @@
-use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
+use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, CatalogDataType, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
 
 fn make_engine() -> Engine {
     Engine::new()
@@ -138,13 +138,13 @@ fn test_register_table() {
         columns: vec![
             Column {
                 name: "id".into(),
-                data_type: arch_db::sql::catalog::DataType::Integer,
+                data_type: CatalogDataType::Integer,
                 primary_key: true,
                 nullable: false,
             },
             Column {
                 name: "name".into(),
-                data_type: arch_db::sql::catalog::DataType::Text,
+                data_type: CatalogDataType::Text,
                 primary_key: false,
                 nullable: false,
             },

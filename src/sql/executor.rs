@@ -1,13 +1,9 @@
-use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, DataType as CatalogDataType, TableSchema}, row::{Row, RowValue}, table::Table}};
+use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, Statement, Update}, catalog::{Catalog, Column, TableSchema}, row::{Row, RowValue}, table::Table}};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
     None,
-
-    CommandComplete {
-        rows_affected: usize,
-    },
-
+    Message(String),
     Rows(Vec<Vec<String>>),
 }
 
@@ -82,6 +78,37 @@ impl<'a> Executor<'a> {
             rows,
             if rows == 1 { "" } else { "s" }
         ))
+    }
+
+    fn scan_table(
+        &mut self,
+        table_name: &str,
+    ) -> Result<Vec<Row>> {
+
+        let prefix = format!("{}:", table_name);
+
+        let mut rows = Vec::new();
+
+        let mut iter = self.engine.iter()?;
+
+        while let Some(record) = iter.next()? {
+
+            if !record.key.starts_with(&prefix) {
+                continue;
+            }
+
+            match record.value {
+                crate::engine::Value::Data(serialized) => {
+                    rows.push(Row::deserialize(&serialized));
+                }
+
+                crate::engine::Value::Tombstone => {
+                    // deleted row
+                }
+            }
+        }
+
+        Ok(rows)
     }
 
     pub fn execute_create_table(
@@ -179,6 +206,45 @@ impl<'a> Executor<'a> {
                 .clone();
 
             let table = Table::new(schema);
+
+            if stmt.where_clause.is_none() {
+
+                let rows = match self.scan_table(&stmt.table_name) {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        return QueryResult::Message(format!("Error: {}", e));
+                    }
+                };
+
+                let mut result = Vec::new();
+
+                for row in rows {
+
+                    let mut values = Vec::new();
+
+                    for column in &stmt.columns {
+
+                        match row.get(column) {
+
+                            Some(RowValue::Integer(i)) => {
+                                values.push(i.to_string());
+                            }
+
+                            Some(RowValue::Text(s)) => {
+                                values.push(s.clone());
+                            }
+
+                            None => {
+                                values.push("NULL".into());
+                            }
+                        }
+                    }
+
+                    result.push(values);
+                }
+
+                return QueryResult::Rows(result);
+            }
 
             // For now we only support:
             // WHERE <primary_key> = <literal>

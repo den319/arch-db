@@ -37,11 +37,11 @@ pub struct BlockRecord {
 }
 
 pub struct SSTableIterator {
-    file: File,
-    index: SSTableIndex,
-    current_block: Option<usize>,
-    block_records: Vec<BlockRecord>,
-    current_record: usize,
+    pub file: File,
+    pub index: SSTableIndex,
+    pub current_block: Option<usize>,
+    pub block_records: Vec<BlockRecord>,
+    pub current_record: usize,
     
 }
 
@@ -271,7 +271,7 @@ impl SSTableIterator {
         Ok(true)
     }
 
-    fn load_next_block(&mut self) -> Result<bool> {
+    pub fn load_next_block(&mut self) -> Result<bool> {
         let next = match self.current_block {
             None => 0,
             Some(i) => i + 1,
