@@ -86,4 +86,11 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOperator {
     Equal,
+    NotEqual,
+
+    GreaterThan,
+    GreaterThanOrEqual,
+
+    LessThan,
+    LessThanOrEqual,
 }

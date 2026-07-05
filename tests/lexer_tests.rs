@@ -1,4 +1,4 @@
-use arch_db::sql::{lexer::Lexer, token::Token};
+use arch_db::sql::{ast::{BinaryOperator, Expr, Statement}, lexer::Lexer, parser::Parser, token::Token};
 
 
 #[test]
@@ -197,3 +197,201 @@ fn lex_insert_statement() {
     assert_eq!(lexer.next_token(), Token::EOF);
 }
 
+
+#[test]
+fn test_not_equal_token() {
+    let mut lexer = Lexer::new("!=");
+
+    assert_eq!(lexer.next_token(), Token::NotEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_greater_than_token() {
+    let mut lexer = Lexer::new(">");
+
+    assert_eq!(lexer.next_token(), Token::GreaterThan);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_greater_than_equal_token() {
+    let mut lexer = Lexer::new(">=");
+
+    assert_eq!(lexer.next_token(), Token::GreaterThanOrEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_less_than_token() {
+    let mut lexer = Lexer::new("<");
+
+    assert_eq!(lexer.next_token(), Token::LessThan);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_less_than_equal_token() {
+    let mut lexer = Lexer::new("<=");
+
+    assert_eq!(lexer.next_token(), Token::LessThanOrEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_lexer_not_equal() {
+    let mut lexer = Lexer::new("!=");
+
+    assert_eq!(lexer.next_token(), Token::NotEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_lexer_greater_than() {
+    let mut lexer = Lexer::new(">");
+
+    assert_eq!(lexer.next_token(), Token::GreaterThan);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_lexer_greater_than_equal() {
+    let mut lexer = Lexer::new(">=");
+
+    assert_eq!(lexer.next_token(), Token::GreaterThanOrEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_lexer_less_than() {
+    let mut lexer = Lexer::new("<");
+
+    assert_eq!(lexer.next_token(), Token::LessThan);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_lexer_less_than_equal() {
+    let mut lexer = Lexer::new("<=");
+
+    assert_eq!(lexer.next_token(), Token::LessThanOrEqual);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+
+#[test]
+fn test_parse_select_where_not_equal() {
+    let sql = "SELECT * FROM users WHERE id != 10;";
+
+    let stmt = Parser::new(sql).parse();
+
+    match stmt {
+        Statement::Select(select) => {
+            match select.where_clause.unwrap() {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(*left, Expr::Identifier("id".into()));
+                    assert_eq!(op, BinaryOperator::NotEqual);
+                    assert_eq!(*right, Expr::Number(10));
+                }
+                _ => panic!("Expected binary expression"),
+            }
+        }
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_select_where_greater_than() {
+    let sql = "SELECT * FROM users WHERE age > 18;";
+
+    let stmt = Parser::new(sql).parse();
+
+    match stmt {
+        Statement::Select(select) => {
+            match select.where_clause.unwrap() {
+                Expr::Binary { op, .. } => {
+                    assert_eq!(op, BinaryOperator::GreaterThan);
+                }
+                _ => panic!("Expected binary expression"),
+            }
+        }
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_select_where_greater_than_equal() {
+    let sql = "SELECT * FROM users WHERE age >= 18;";
+
+    let stmt = Parser::new(sql).parse();
+
+    match stmt {
+        Statement::Select(select) => {
+            match select.where_clause.unwrap() {
+                Expr::Binary { op, .. } => {
+                    assert_eq!(op, BinaryOperator::GreaterThanOrEqual);
+                }
+                _ => panic!("Expected binary expression"),
+            }
+        }
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_select_where_less_than() {
+    let sql = "SELECT * FROM users WHERE age < 18;";
+
+    let stmt = Parser::new(sql).parse();
+
+    match stmt {
+        Statement::Select(select) => {
+            match select.where_clause.unwrap() {
+                Expr::Binary { op, .. } => {
+                    assert_eq!(op, BinaryOperator::LessThan);
+                }
+                _ => panic!("Expected binary expression"),
+            }
+        }
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_select_where_less_than_equal() {
+    let sql = "SELECT * FROM users WHERE age <= 18;";
+
+    let stmt = Parser::new(sql).parse();
+
+    match stmt {
+        Statement::Select(select) => {
+            match select.where_clause.unwrap() {
+                Expr::Binary { op, .. } => {
+                    assert_eq!(op, BinaryOperator::LessThanOrEqual);
+                }
+                _ => panic!("Expected binary expression"),
+            }
+        }
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_missing_operator() {
+    let sql = "SELECT * FROM users WHERE id 10;";
+
+    assert!(Parser::new(sql).parse().is_err());
+}
+
+#[test]
+fn test_parse_missing_rhs() {
+    let sql = "SELECT * FROM users WHERE id >=;";
+
+    assert!(Parser::new(sql).parse().is_err());
+}
+
+#[test]
+fn test_parse_missing_lhs() {
+    let sql = "SELECT * FROM users WHERE >= 10;";
+
+    assert!(Parser::new(sql).parse().is_err());
+}

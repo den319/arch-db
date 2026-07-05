@@ -991,48 +991,7 @@ fn test_select_all_rows() {
 }
 
 #[test]
-fn test_select_single_column_scan() {
-    let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
-    let mut executor = Executor::new(&mut catalog, &mut engine);
-
-    executor.execute(Statement::CreateTable(CreateTable {
-        table_name: "users".into(),
-        columns: vec![
-            ColumnDef { name: "id".into(), data_type: DataType::Int },
-            ColumnDef { name: "name".into(), data_type: DataType::Text },
-        ],
-    }));
-
-    executor.execute(Statement::Insert(Insert {
-        table_name: "users".into(),
-        columns: vec!["id".into(), "name".into()],
-        values: vec![Expr::Number(1), Expr::String("Alice".into())],
-    }));
-
-    executor.execute(Statement::Insert(Insert {
-        table_name: "users".into(),
-        columns: vec!["id".into(), "name".into()],
-        values: vec![Expr::Number(2), Expr::String("Bob".into())],
-    }));
-
-    let result = executor.execute(Statement::Select(Select {
-        columns: vec![SelectItem::Column("name".into())],
-        table_name: "users".into(),
-        where_clause: None,
-    }));
-
-    assert_eq!(
-        result,
-        QueryResult::Rows(vec![
-            vec!["Alice".into()],
-            vec!["Bob".into()],
-        ])
-    );
-}
-
-#[test]
-fn test_select_empty_table_scan() {
+fn test_select_all_empty_table() {
     let mut catalog = Catalog::new();
     let mut engine = Engine::new();
     let mut executor = Executor::new(&mut catalog, &mut engine);
@@ -1058,7 +1017,7 @@ fn test_select_empty_table_scan() {
 }
 
 #[test]
-fn test_scan_only_requested_table() {
+fn test_select_all_single_row() {
     let mut catalog = Catalog::new();
     let mut engine = Engine::new();
     let mut executor = Executor::new(&mut catalog, &mut engine);
@@ -1071,24 +1030,10 @@ fn test_scan_only_requested_table() {
         ],
     }));
 
-    executor.execute(Statement::CreateTable(CreateTable {
-        table_name: "orders".into(),
-        columns: vec![
-            ColumnDef { name: "id".into(), data_type: DataType::Int },
-            ColumnDef { name: "item".into(), data_type: DataType::Text },
-        ],
-    }));
-
     executor.execute(Statement::Insert(Insert {
         table_name: "users".into(),
         columns: vec!["id".into(), "name".into()],
         values: vec![Expr::Number(1), Expr::String("Alice".into())],
-    }));
-
-    executor.execute(Statement::Insert(Insert {
-        table_name: "orders".into(),
-        columns: vec!["id".into(), "item".into()],
-        values: vec![Expr::Number(1), Expr::String("Laptop".into())],
     }));
 
     let result = executor.execute(Statement::Select(Select {
@@ -1106,7 +1051,7 @@ fn test_scan_only_requested_table() {
 }
 
 #[test]
-fn test_scan_after_delete() {
+fn test_select_all_multiple_rows() {
     let mut catalog = Catalog::new();
     let mut engine = Engine::new();
     let mut executor = Executor::new(&mut catalog, &mut engine);
@@ -1124,7 +1069,52 @@ fn test_scan_after_delete() {
         columns: vec!["id".into(), "name".into()],
         values: vec![Expr::Number(1), Expr::String("Alice".into())],
     }));
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+    }));
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(3), Expr::String("Charlie".into())],
+    }));
 
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Alice".into()],
+            vec!["2".into(), "Bob".into()],
+            vec!["3".into(), "Charlie".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_select_all_skips_deleted_rows() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
     executor.execute(Statement::Insert(Insert {
         table_name: "users".into(),
         columns: vec!["id".into(), "name".into()],
@@ -1155,7 +1145,7 @@ fn test_scan_after_delete() {
 }
 
 #[test]
-fn test_scan_after_update() {
+fn test_select_all_after_update() {
     let mut catalog = Catalog::new();
     let mut engine = Engine::new();
     let mut executor = Executor::new(&mut catalog, &mut engine);
@@ -1172,6 +1162,66 @@ fn test_scan_after_update() {
         table_name: "users".into(),
         columns: vec!["id".into(), "name".into()],
         values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![Assignment {
+            column: "name".into(),
+            value: Expr::String("Alice Smith".into()),
+        }],
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    assert_eq!(
+        result,
+        QueryResult::Rows(vec![
+            vec!["1".into(), "Alice Smith".into()],
+        ])
+    );
+}
+
+#[test]
+fn test_select_all_after_multiple_updates() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![Assignment {
+            column: "name".into(),
+            value: Expr::String("Bob".into()),
+        }],
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expr::Number(1)),
+        }),
     }));
 
     executor.execute(Statement::Update(Update {
@@ -1202,7 +1252,7 @@ fn test_scan_after_update() {
 }
 
 #[test]
-fn test_scan_returns_rows_in_key_order() {
+fn test_select_all_after_flush() {
     let mut catalog = Catalog::new();
     let mut engine = Engine::new();
     let mut executor = Executor::new(&mut catalog, &mut engine);
@@ -1215,22 +1265,67 @@ fn test_scan_returns_rows_in_key_order() {
         ],
     }));
 
-    executor.execute(Statement::Insert(Insert {
+    // Insert enough rows to trigger a flush.
+    for i in 0..50 {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into(), "name".into()],
+            values: vec![Expr::Number(i), Expr::String(format!("User{}", i))],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
-        columns: vec!["id".into(), "name".into()],
-        values: vec![Expr::Number(3), Expr::String("Charlie".into())],
+        where_clause: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            assert_eq!(rows.len(), 50);
+        }
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_all_only_requested_table() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "products".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
     }));
 
     executor.execute(Statement::Insert(Insert {
         table_name: "users".into(),
         columns: vec!["id".into(), "name".into()],
-        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+        ],
     }));
 
     executor.execute(Statement::Insert(Insert {
-        table_name: "users".into(),
+        table_name: "products".into(),
         columns: vec!["id".into(), "name".into()],
-        values: vec![Expr::Number(2), Expr::String("Bob".into())],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Laptop".into()),
+        ],
     }));
 
     let result = executor.execute(Statement::Select(Select {
@@ -1242,9 +1337,66 @@ fn test_scan_returns_rows_in_key_order() {
     assert_eq!(
         result,
         QueryResult::Rows(vec![
-            vec!["1".into(), "Alice".into()],
-            vec!["2".into(), "Bob".into()],
-            vec!["3".into(), "Charlie".into()],
+            vec!["1".into(), "Alice".into()]
         ])
     );
+}
+
+#[test]
+fn test_select_all_from_memtable_and_sstable() {
+    let mut catalog = Catalog::new();
+    let mut engine = Engine::new();
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef { name: "id".into(), data_type: DataType::Int },
+            ColumnDef { name: "name".into(), data_type: DataType::Text },
+        ],
+    }));
+
+    // Enough inserts to flush the memtable.
+    for i in 0..50 {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into(), "name".into()],
+            values: vec![
+                Expr::Number(i),
+                Expr::String(format!("User{}", i)),
+            ],
+        }));
+    }
+
+    // These rows should remain only in the memtable.
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![
+            Expr::Number(100),
+            Expr::String("Extra1".into()),
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![
+            Expr::Number(101),
+            Expr::String("Extra2".into()),
+        ],
+    }));
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            assert_eq!(rows.len(), 52);
+        }
+        _ => panic!("Expected rows"),
+    }
 }

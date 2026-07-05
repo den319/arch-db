@@ -23,6 +23,13 @@ pub enum Token {
     Semicolon,
     Star,
     Equal,
+    NotEqual,
+
+    GreaterThan,
+    GreaterThanOrEqual,
+
+    LessThan,
+    LessThanOrEqual,
 
     // literals
     Identifier(String),
@@ -55,6 +62,11 @@ impl Display for Token {
             Token::Semicolon => write!(f, ";"),
             Token::Star => write!(f, "*"),
             Token::Equal => write!(f, "="),
+            Token::NotEqual => write!(f, "!="),
+            Token::GreaterThan => write!(f, ">"),
+            Token::GreaterThanOrEqual => write!(f, ">="),
+            Token::LessThan => write!(f, "<"),
+            Token::LessThanOrEqual => write!(f, "<="),
 
             Token::Identifier(s) => write!(f, "Identifier({})", s),
             Token::String(s) => write!(f, "String({})", s),

@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage_iterator::StorageIterator};
+use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
 use crate::{
     bloom_filter::BloomFilter,
     cache::CacheKey,
@@ -35,27 +35,27 @@ pub struct Engine {
 }
 
 #[derive(Clone, Debug)]
-pub struct HeapItem {
+struct ScanHeapItem {
     key: String,
     val: Value,
     source_idx: usize,
 }
 
-impl Eq for HeapItem {}
+impl Eq for ScanHeapItem {}
 
-impl PartialEq for HeapItem {
+impl PartialEq for ScanHeapItem {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
     }
 }
 
-impl Ord for HeapItem {
+impl Ord for ScanHeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
         other.key.cmp(&self.key)
     }
 }
 
-impl PartialOrd for HeapItem {
+impl PartialOrd for ScanHeapItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -328,15 +328,15 @@ impl Engine {
         sources.push(mem_data);
 
         let sstables = self.sstables.lock().unwrap();
-        for table in &sstables.l0 {
+        for table in sstables.l0.iter().rev() {
             let data = read_sstable(&table.path).expect("Scan of L0 Failed!");
             sources.push(data);
         }
-        for table in &sstables.l1 {
+        for table in sstables.l1.iter().rev() {
             let data = read_sstable(&table.path).expect("Scan of L1 failed");
             sources.push(data);
         }
-        for table in &sstables.l2 {
+        for table in sstables.l2.iter().rev() {
             let data = read_sstable(&table.path).expect("Scan of L2 failed");
             sources.push(data);
         }
@@ -346,7 +346,7 @@ impl Engine {
 
         for (src_idx, source) in sources.iter().enumerate() {
             if let Some((k, v)) = source.first() {
-                heap.push(HeapItem {
+                heap.push(ScanHeapItem {
                     key: k.clone(),
                     val: v.clone(),
                     source_idx: src_idx,
@@ -363,7 +363,7 @@ impl Engine {
             let src = item.source_idx;
             positions[src] += 1;
             if let Some((k, v)) = sources[src].get(positions[src]) {
-                heap.push(HeapItem {
+                heap.push(ScanHeapItem {
                     key: k.clone(),
                     val: v.clone(),
                     source_idx: src,
@@ -379,36 +379,36 @@ impl Engine {
         result
     }
 
-    pub fn iter(&mut self) -> Result<EngineIterator> {
+    pub fn iter(&mut self) -> Result<UnifiedStorageIterator> {
         let mut iterators: Vec<Box<dyn StorageIterator>> = Vec::new();
 
         iterators.push(Box::new(MemtableIterator::new(&self.memtable)));
 
         let sstables = self.sstables.lock().unwrap();
 
-        for table in &sstables.l0 {
+        for table in sstables.l0.iter().rev() {
             iterators.push(Box::new(SSTableIterator::new(
                 &table.path,
                 table.index.clone(),
             )?));
         }
 
-        for table in &sstables.l1 {
+        for table in sstables.l1.iter().rev() {
             iterators.push(Box::new(SSTableIterator::new(
                 &table.path,
                 table.index.clone(),
             )?));
         }
 
-        for table in &sstables.l2 {
+        for table in sstables.l2.iter().rev() {
             iterators.push(Box::new(SSTableIterator::new(
                 &table.path,
                 table.index.clone(),
             )?));
         }
 
-        let merge = MergeIterator::new(iterators, false)?;
+        // let merge = MergeIterator::new(iterators, false)?;
 
-        Ok(EngineIterator::new(merge))
+        UnifiedStorageIterator::new(iterators)
     }
 }

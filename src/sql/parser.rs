@@ -282,14 +282,7 @@ impl Parser {
     pub fn parse_expression(&mut self) -> Expr {
         let left = self.parse_literal();
 
-        let op = match self.current_token {
-            Token::Equal => {
-                self.advance();
-                BinaryOperator::Equal
-            }
-
-            _ => panic!("Expected binary operator"),
-        };
+        let op = self.parse_binary_operator();
 
         let right = self.parse_literal();
 
@@ -412,5 +405,44 @@ impl Parser {
             assignments,
             where_clause,
         })
+    }
+
+    fn parse_binary_operator(&mut self) -> BinaryOperator {
+        match &self.current_token {
+            Token::Equal => {
+                self.advance();
+                BinaryOperator::Equal
+            }
+
+            Token::NotEqual => {
+                self.advance();
+                BinaryOperator::NotEqual
+            }
+
+            Token::GreaterThan => {
+                self.advance();
+                BinaryOperator::GreaterThan
+            }
+
+            Token::GreaterThanOrEqual => {
+                self.advance();
+                BinaryOperator::GreaterThanOrEqual
+            }
+
+            Token::LessThan => {
+                self.advance();
+                BinaryOperator::LessThan
+            }
+
+            Token::LessThanOrEqual => {
+                self.advance();
+                BinaryOperator::LessThanOrEqual
+            }
+
+            _ => panic!(
+                "Expected comparison operator, found {:?}",
+                self.current_token
+            ),
+        }
     }
 }

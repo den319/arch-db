@@ -1,4 +1,4 @@
-use crate::{engine::Engine, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -98,12 +98,12 @@ impl<'a> Executor<'a> {
             }
 
             match record.value {
-                crate::engine::Value::Data(serialized) => {
+                Value::Data(serialized) => {
                     rows.push(Row::deserialize(&serialized));
                 }
 
-                crate::engine::Value::Tombstone => {
-                    // deleted row
+                Value::Tombstone => {
+                    continue;
                 }
             }
         }

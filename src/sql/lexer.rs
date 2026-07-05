@@ -31,6 +31,10 @@ impl Lexer {
         }
     }
 
+    pub fn peek(&self) -> Option<char> {
+        self.input.get(self.position + 1).copied()
+    }
+
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
 
@@ -57,6 +61,41 @@ impl Lexer {
             Some('=') => {
                 self.advance();
                 Token::Equal
+            }
+
+            Some('!') => {
+                if self.peek() == Some('=') {
+                    self.advance(); // !
+                    self.advance(); // =
+
+                    Token::NotEqual
+                } else {
+                    panic!("Unexpected character: !");
+                }
+            }
+
+            Some('>') => {
+                if self.peek() == Some('=') {
+                    self.advance(); // >
+                    self.advance(); // =
+
+                    Token::GreaterThanOrEqual
+                } else {
+                    self.advance();
+                    Token::GreaterThan
+                }
+            }
+
+            Some('<') => {
+                if self.peek() == Some('=') {
+                    self.advance(); // <
+                    self.advance(); // =
+
+                    Token::LessThanOrEqual
+                } else {
+                    self.advance();
+                    Token::LessThan
+                }
             }
 
             Some('(') => {
