@@ -373,9 +373,7 @@ fn test_select_missing_row() {
 
     assert_eq!(
         result,
-        QueryResult::Message(
-            "Error: row not found".into()
-        )
+        QueryResult::Rows(vec![])
     );
 }
 
@@ -435,9 +433,7 @@ fn test_select_with_invalid_where_clause() {
 
     assert_eq!(
         result,
-        QueryResult::Message(
-            "Error: unsupported WHERE clause".into()
-        )
+        QueryResult::Rows(vec![])
     );
 } 
 

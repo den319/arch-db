@@ -282,7 +282,8 @@ fn test_lexer_less_than_equal() {
 fn test_parse_select_where_not_equal() {
     let sql = "SELECT * FROM users WHERE id != 10;";
 
-    let stmt = Parser::new(sql).parse();
+    let mut parser = Parser::new(Lexer::new(sql));
+    let stmt = parser.parse_statement();
 
     match stmt {
         Statement::Select(select) => {
@@ -303,7 +304,8 @@ fn test_parse_select_where_not_equal() {
 fn test_parse_select_where_greater_than() {
     let sql = "SELECT * FROM users WHERE age > 18;";
 
-    let stmt = Parser::new(sql).parse();
+    let mut parser = Parser::new(Lexer::new(sql));
+    let stmt = parser.parse_statement();
 
     match stmt {
         Statement::Select(select) => {
@@ -322,7 +324,8 @@ fn test_parse_select_where_greater_than() {
 fn test_parse_select_where_greater_than_equal() {
     let sql = "SELECT * FROM users WHERE age >= 18;";
 
-    let stmt = Parser::new(sql).parse();
+    let mut parser = Parser::new(Lexer::new(sql));
+    let stmt = parser.parse_statement();
 
     match stmt {
         Statement::Select(select) => {
@@ -341,7 +344,8 @@ fn test_parse_select_where_greater_than_equal() {
 fn test_parse_select_where_less_than() {
     let sql = "SELECT * FROM users WHERE age < 18;";
 
-    let stmt = Parser::new(sql).parse();
+    let mut parser = Parser::new(Lexer::new(sql));
+    let stmt = parser.parse_statement();
 
     match stmt {
         Statement::Select(select) => {
@@ -360,7 +364,8 @@ fn test_parse_select_where_less_than() {
 fn test_parse_select_where_less_than_equal() {
     let sql = "SELECT * FROM users WHERE age <= 18;";
 
-    let stmt = Parser::new(sql).parse();
+    let mut parser = Parser::new(Lexer::new(sql));
+    let stmt = parser.parse_statement();
 
     match stmt {
         Statement::Select(select) => {
@@ -379,19 +384,28 @@ fn test_parse_select_where_less_than_equal() {
 fn test_parse_missing_operator() {
     let sql = "SELECT * FROM users WHERE id 10;";
 
-    assert!(Parser::new(sql).parse().is_err());
+    let mut parser = Parser::new(Lexer::new(sql));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parser.parse_statement();
+    })).is_err());
 }
 
 #[test]
 fn test_parse_missing_rhs() {
     let sql = "SELECT * FROM users WHERE id >=;";
 
-    assert!(Parser::new(sql).parse().is_err());
+    let mut parser = Parser::new(Lexer::new(sql));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parser.parse_statement();
+    })).is_err());
 }
 
 #[test]
 fn test_parse_missing_lhs() {
     let sql = "SELECT * FROM users WHERE >= 10;";
 
-    assert!(Parser::new(sql).parse().is_err());
+    let mut parser = Parser::new(Lexer::new(sql));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parser.parse_statement();
+    })).is_err());
 }

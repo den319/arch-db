@@ -1,4 +1,4 @@
-use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -78,6 +78,44 @@ impl<'a> Executor<'a> {
             rows,
             if rows == 1 { "" } else { "s" }
         ))
+    }
+
+    fn can_use_primary_key_lookup(
+        &self,
+        table: &Table,
+        expr: &Expr,
+    ) -> bool {
+
+        let pk = match table.schema.primary_key() {
+            Some(pk) => pk,
+            None => return false,
+        };
+
+        match expr {
+            Expr::Binary { left, op, right } => {
+
+                if *op != BinaryOperator::Equal {
+                    return false;
+                }
+
+                match (&**left, &**right) {
+
+                    (
+                        Expr::Identifier(column),
+                        Expr::Number(_),
+                    ) if column == &pk.name => true,
+
+                    (
+                        Expr::Identifier(column),
+                        Expr::String(_),
+                    ) if column == &pk.name => true,
+
+                    _ => false,
+                }
+            }
+
+            _ => false,
+        }
     }
 
     fn scan_table(
@@ -191,159 +229,178 @@ impl<'a> Executor<'a> {
         stmt: Select,
     ) -> QueryResult {
 
-        let result = (|| -> Result<QueryResult> {
+        let schema = match self.catalog.table(&stmt.table_name) {
+            Some(schema) => schema.clone(),
+            None => {
+                return QueryResult::Message(format!(
+                    "Error: table '{}' does not exist",
+                    stmt.table_name
+                ));
+            }
+        };
 
-            // Lookup schema
-            let schema = self
-                .catalog
-                .table(&stmt.table_name)
-                .ok_or(DatabaseError::Other(
-                    format!(
-                        "table '{}' does not exist",
-                        stmt.table_name
-                    ),
-                ))?
-                .clone();
+        let table = Table::new(schema.clone());
 
-            let table = Table::new(schema);
+        //----------------------------------------------------------
+        // FAST PATH (PRIMARY KEY LOOKUP)
+        //----------------------------------------------------------
 
-            if stmt.where_clause.is_none() {
+        if let Some(expr) = &stmt.where_clause {
 
-                let rows = match self.scan_table(&stmt.table_name) {
-                    Ok(rows) => rows,
-                    Err(e) => {
-                        return Ok(QueryResult::Message(format!("Error: {}", e)));
+            if self.can_use_primary_key_lookup(&table, expr) {
+
+                let key = match table.storage_key_from_expr(expr) {
+                    Ok(key) => key,
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err
+                        ));
                     }
                 };
 
-                let mut result: Vec<Vec<String>> = Vec::new();
+                let value = match self.engine.get(&key) {
 
-                for row in rows {
+                    Some(crate::engine::Value::Data(data)) => data,
 
-                    let mut values = Vec::new();
+                    Some(crate::engine::Value::Tombstone) | None => {
+                        return QueryResult::Rows(vec![]);
+                    }
+                };
 
-                    for column in &stmt.columns {
-                        match column {
-                            SelectItem::Wildcard => {
-                                for (_, val) in &row.values {
-                                    match val {
-                                        RowValue::Integer(i) => values.push(i.to_string()),
-                                        RowValue::Text(s) => values.push(s.clone()),
-                                    }
-                                }
-                            }
-                            SelectItem::Column(col_name) => {
-                                match row.get(col_name) {
-                                    Some(RowValue::Integer(i)) => {
+                let row = Row::deserialize(&value);
+
+                let mut values = Vec::new();
+
+                for column in &stmt.columns {
+
+                    match column {
+
+                        SelectItem::Wildcard => {
+
+                            for (_, value) in &row.values {
+
+                                match value {
+
+                                    RowValue::Integer(i) => {
                                         values.push(i.to_string());
                                     }
-                                    Some(RowValue::Text(s)) => {
+
+                                    RowValue::Text(s) => {
                                         values.push(s.clone());
                                     }
-                                    None => {
-                                        values.push("NULL".into());
-                                    }
+                                }
+                            }
+                        }
+
+                        SelectItem::Column(name) => {
+
+                            match row.get(name) {
+
+                                Some(RowValue::Integer(i)) => {
+                                    values.push(i.to_string());
+                                }
+
+                                Some(RowValue::Text(s)) => {
+                                    values.push(s.clone());
+                                }
+
+                                None => {
+                                    values.push("NULL".into());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return QueryResult::Rows(vec![values]);
+            }
+        }
+
+        //----------------------------------------------------------
+        // FALLBACK : TABLE SCAN
+        //----------------------------------------------------------
+
+        let rows = match self.scan_table(&stmt.table_name) {
+
+            Ok(rows) => rows,
+
+            Err(err) => {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+        };
+
+        let mut result = Vec::new();
+
+        for row in rows {
+
+            if let Some(expr) = &stmt.where_clause {
+
+                match ExpressionEvaluator::evaluate(&row, expr) {
+
+                    Ok(true) => {}
+
+                    Ok(false) => continue,
+
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err
+                        ));
+                    }
+                }
+            }
+
+            let mut values = Vec::new();
+
+            for column in &stmt.columns {
+
+                match column {
+
+                    SelectItem::Wildcard => {
+
+                        for (_, value) in &row.values {
+
+                            match value {
+
+                                RowValue::Integer(i) => {
+                                    values.push(i.to_string());
+                                }
+
+                                RowValue::Text(s) => {
+                                    values.push(s.clone());
                                 }
                             }
                         }
                     }
 
-                        if let Some(expr) = &stmt.where_clause {
-                            if !ExpressionEvaluator::evaluate(
-                                &row,
-                                expr,
-                            )? {
-                                continue;
+                    SelectItem::Column(name) => {
+
+                        match row.get(name) {
+
+                            Some(RowValue::Integer(i)) => {
+                                values.push(i.to_string());
                             }
-                        }
 
-                    result.push(values);
-                }
+                            Some(RowValue::Text(s)) => {
+                                values.push(s.clone());
+                            }
 
-                    return Ok(QueryResult::Rows(result));
-            }
-
-            // For now we only support:
-            // WHERE <primary_key> = <literal>
-            let where_clause = stmt
-                .where_clause
-                .ok_or(DatabaseError::Other(
-                    "SELECT without WHERE is not supported yet".into(),
-                ))?;
-
-            let storage_key = match where_clause {
-
-                Expr::Binary {
-                    left,
-                    op: _,
-                    right,
-                } => {
-
-                    match (*left, *right) {
-
-                        (Expr::Identifier(_), value_expr) => {
-
-                            let value = self.expr_to_value(value_expr)?;
-
-                            table
-                                .storage_key_from_primary_key(&value)
-                                .ok_or(DatabaseError::Other(
-                                    "missing primary key".into(),
-                                ))?
-                        }
-
-                        _ => {
-                            return Err(DatabaseError::Other(
-                                "unsupported WHERE clause".into(),
-                            ));
+                            None => {
+                                values.push("NULL".into());
+                            }
                         }
                     }
                 }
-
-                _ => {
-                    return Err(DatabaseError::Other(
-                        "unsupported WHERE clause".into(),
-                    ));
-                }
-            };
-
-            let value = self
-                .engine
-                .get(&storage_key)
-                .ok_or(DatabaseError::Other(
-                    "row not found".into(),
-                ))?;
-
-            match value {
-
-                crate::engine::Value::Data(serialized) => {
-
-                    let row = Row::deserialize(&serialized);
-
-                    let result = row
-                        .values
-                        .into_values()
-                        .map(|value| match value {
-                            RowValue::Integer(v) => v.to_string(),
-                            RowValue::Text(v) => v,
-                        })
-                        .collect::<Vec<_>>();
-
-                    Ok(QueryResult::Rows(vec![result]))
-                }
-
-                crate::engine::Value::Tombstone => {
-                    Err(DatabaseError::Other(
-                        "row not found".into(),
-                    ))
-                }
             }
 
-        })();
+            result.push(values);
+        }
 
-        result.unwrap_or_else(|e| {
-            QueryResult::Message(format!("Error: {}", e))
-        })
+        QueryResult::Rows(result)
     }
 
     pub fn execute_delete(
