@@ -2,13 +2,20 @@
 
 use std::{io::{self, Write}};
 
-use arch_db::{command::Command, engine::Engine, parser::parse, sstable_manager::{ManifestRecord, init_sstable_counter, next_sstable_id}, storage::{self, Storage}};
+use arch_db::{command::Command, engine::Engine, parser::parse, sql::{catalog::Catalog, executor::Executor, lexer::Lexer, sql_parser::SQLParser}, sstable_manager::{ManifestRecord, init_sstable_counter, next_sstable_id}, storage::{self, Storage}};
 
 
 fn main() {
     init_sstable_counter();
 
-    let mut engine= Engine::new();
+    let mut engine = Engine::new();
+
+    let mut catalog = Catalog::new();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
 
     // Replay manifest to restore known SSTables
     // Uses load_table_metadata with manifest's stored min_key/max_key/file_size
@@ -69,6 +76,8 @@ fn main() {
         }
     }
 
+    
+
     loop {
         print!("archdb > ");
         io::stdout().flush().unwrap();
@@ -76,8 +85,22 @@ fn main() {
 
         io::stdin().read_line(&mut input).expect("Failed to read line");
 
-        let command= parse(&input);
+        if is_sql(&input) {
 
+            let lexer = Lexer::new(&input.trim());
+
+            let mut parser = SQLParser::new(lexer);
+
+            let statement = parser.parse();
+
+            let result = executor.execute(statement);
+
+            println!("{:#?}", result);
+
+            continue;
+        }
+
+        let command= parse(&input);
         // println!("input: {:?}, command: {:?}", &input, command);
 
         match &command {
@@ -115,4 +138,15 @@ fn main() {
             engine.maybe_flush().expect("Flush failed!");
         }
     }
+}
+
+
+fn is_sql(input: &str) -> bool {
+    let upper = input.trim().to_ascii_uppercase();
+
+    upper.starts_with("SELECT")
+        || upper.starts_with("INSERT")
+        || upper.starts_with("UPDATE")
+        || upper.starts_with("DELETE")
+        || upper.starts_with("CREATE")
 }

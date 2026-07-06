@@ -1,6 +1,6 @@
 pub mod token;
 pub mod lexer;
-pub mod parser;
+pub mod sql_parser;
 pub mod ast;
 pub mod executor;
 pub mod catalog;

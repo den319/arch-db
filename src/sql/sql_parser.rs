@@ -4,12 +4,12 @@ use crate::sql::{
     token::Token,
 };
 
-pub struct Parser {
+pub struct SQLParser {
     lexer: Lexer,
     current_token: Token,
 }
 
-impl Parser {
+impl SQLParser {
     pub fn new(mut lexer: Lexer) -> Self {
         let current_token = lexer.next_token();
 
@@ -71,7 +71,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_statement(&mut self) -> Statement {
+    pub fn parse(&mut self) -> Statement {
         match self.current_token {
             Token::Select => self.parse_select(),
 
