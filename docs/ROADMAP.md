@@ -15,8 +15,6 @@
 - [x] Background compaction worker (async via mpsc channel)
 - [x] Manifest (persistent metadata for SSTable tracking)
 - [x] SSTable splitting during compaction (avoids oversized files)
-- [ ] MVCC (Multi-Version Concurrency Control)
-- [ ] Snapshot Isolation
 
 ## SQL Layer
 - [x] Lexer (tokenizer for SQL statements)
@@ -31,13 +29,38 @@
 - [x] Catalog (table schema metadata)
 - [x] Row serialization/deserialization
 
-## Remaining Work (Priority Order)
-1. **UPDATE with full table scan** — scan all rows, evaluate WHERE, update matching rows
-2. **DELETE with full table scan** — scan all rows, evaluate WHERE, delete matching rows
-3. **SQL CLI** — replace raw Command interface with SQL-based REPL
-4. **ORDER BY** — sort result sets
-5. **LIMIT** — restrict number of returned rows
-6. **Secondary indexes** — non-primary key index support
-7. **Primary key declaration in CREATE TABLE** — explicit PK syntax instead of first-column default
-8. **Query planner** — choose index scan vs. table scan based on cost estimation
-9. **Transactions** — atomic multi-statement operations
+## Remaining Work (By Phase)
+
+### Phase 1 — Core SQL Operations
+- [ ] UPDATE with full table scan — scan all rows, evaluate WHERE, update matching rows
+- [ ] DELETE with full table scan — scan all rows, evaluate WHERE, delete matching rows
+- [ ] SQL CLI — replace raw Command interface with SQL-based REPL
+
+### Phase 2 — Query Features
+- [ ] ORDER BY — sort result sets
+- [ ] LIMIT — restrict number of returned rows
+
+### Phase 3 — Indexing
+- [ ] Secondary indexes — non-primary key index support
+- [ ] Explicit PRIMARY KEY syntax in CREATE TABLE — instead of first-column default
+
+### Phase 4 — Query Optimization
+- [ ] Query planner — choose index scan vs. table scan based on cost estimation
+
+### Phase 5 — Transactions & Concurrency
+- [ ] Transactions — atomic multi-statement operations
+- [ ] MVCC (Multi-Version Concurrency Control)
+- [ ] Snapshot Isolation
+
+## Future Ideas
+- JOIN (INNER, LEFT, RIGHT)
+- GROUP BY and HAVING
+- Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
+- ALTER TABLE (ADD/DROP columns)
+- DROP TABLE
+- Composite indexes (multi-column)
+- B+Tree indexes for range queries
+- Cost-based optimizer
+- Replication
+- Prepared statements
+- Connection pooling

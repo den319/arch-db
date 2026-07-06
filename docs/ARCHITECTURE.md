@@ -74,13 +74,30 @@ Client → Engine.iter()
          → UnifiedStorageIterator merges all iterators in key order
 ```
 
+### Read Priority
+
+This is one of the most important rules of an LSM database. When reading a key, the first visible version wins:
+
+1. **Memtable** — most recent writes (checked first)
+2. **L0 SSTables** — newest table first (reverse iteration)
+3. **L1 SSTables** — newest table first
+4. **L2 SSTables** — newest table first
+
+**Key rules:**
+- The first visible version of a key wins (newest data takes priority)
+- A `Tombstone` value means the key was deleted — it stops the search and returns "not found"
+- Bloom filters are checked before reading any SSTable to avoid unnecessary disk I/O
+- The lock on SSTableManager is released before any disk reads, so compaction is not blocked
+
 ### Compaction
 
-- **Size-tiered compaction**: When a level exceeds threshold, tables are merged into the next level
+- **Size-tiered compaction**: When a level exceeds a threshold, tables are merged into the next level
 - **L0 → L1**: Triggered by CompactionPicker when L0 has enough tables
 - **L1 → L2**: Triggered when L1 exceeds threshold
-- **Background worker**: Async compaction via mpsc channel, lock is released during disk I/O
+- **Background worker**: Async compaction via mpsc channel; the SSTableManager lock is released during disk I/O so writes are not blocked
 - **SSTable splitting**: Large compaction outputs are split into multiple files to avoid oversized tables
+- **Duplicate key handling**: Compaction preserves the newest version of duplicate keys and drops obsolete versions
+- **Tombstone preservation**: Tombstones are preserved during compaction until it is safe to remove them (i.e., all older data that they shadow has been compacted away)
 
 ### WAL (Write-Ahead Log)
 
@@ -98,20 +115,28 @@ SQL String → Lexer → Token Stream → Parser → AST → Executor → QueryR
 ```
 
 ### Executor Flow (SELECT)
+
 ```
 execute_select(stmt)
   ├─ Lookup table schema from Catalog
-  ├─ If WHERE clause is a primary key equality check:
-  │   → FAST PATH: Direct key lookup via Engine.get()
+  │
+  ├─ FAST PATH (Primary Key Lookup):
+  │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Direct key lookup via Engine.get()
+  │   → O(log n) — single key lookup
   │   → Deserialize row, project columns, return
-  └─ Else:
-      → FALLBACK: Full table scan via Engine.iter()
-      → For each row matching table prefix:
+  │
+  └─ SLOW PATH (Full Table Scan):
+      Condition: Everything else (no WHERE, non-PK WHERE, range conditions)
+      → Full scan via Engine.iter() over all data (memtable + all SSTables)
+      → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
         → Project requested columns
         → Collect matching rows
       → Return
 ```
+
+This optimization is significant: primary key lookups avoid reading all SSTable blocks, while full scans must iterate over every row in the database.
 
 ### Key Data Structures
 

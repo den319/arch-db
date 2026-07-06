@@ -121,7 +121,7 @@ impl<'a> Executor<'a> {
     fn scan_table(
         &mut self,
         table_name: &str,
-    ) -> Result<Vec<Row>> {
+    ) -> Result<Vec<(String,Row)>> {
 
         let prefix = format!("{}:", table_name);
 
@@ -137,7 +137,8 @@ impl<'a> Executor<'a> {
 
             match record.value {
                 Value::Data(serialized) => {
-                    rows.push(Row::deserialize(&serialized));
+                    let row= Row::deserialize(&serialized);
+                    rows.push((record.key, row));
                 }
 
                 Value::Tombstone => {
@@ -147,6 +148,82 @@ impl<'a> Executor<'a> {
         }
 
         Ok(rows)
+    }
+
+    fn matching_rows(
+        &mut self,
+        table_name: &str,
+        where_clause: &Expr,
+    ) -> Result<Vec<(String,Row)>> {
+
+        let rows = self.scan_table(table_name)?;
+
+        let mut result = Vec::new();
+
+        for (key, row) in rows {
+
+            if ExpressionEvaluator::evaluate(
+                &row,
+                where_clause,
+            )? {
+
+                result.push((key, row));
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn project_row(
+        &self,
+        row: &Row,
+        columns: &[SelectItem],
+    ) -> Vec<String> {
+
+        let mut values = Vec::new();
+
+        for column in columns {
+
+            match column {
+
+                SelectItem::Wildcard => {
+
+                    for (_, value) in &row.values {
+
+                        match value {
+
+                            RowValue::Integer(i) => {
+                                values.push(i.to_string());
+                            }
+
+                            RowValue::Text(s) => {
+                                values.push(s.clone());
+                            }
+                        }
+                    }
+                }
+
+                SelectItem::Column(name) => {
+
+                    match row.get(name) {
+
+                        Some(RowValue::Integer(i)) => {
+                            values.push(i.to_string());
+                        }
+
+                        Some(RowValue::Text(s)) => {
+                            values.push(s.clone());
+                        }
+
+                        None => {
+                            values.push("NULL".into());
+                        }
+                    }
+                }
+            }
+        }
+
+        values
     }
 
     pub fn execute_create_table(
@@ -261,57 +338,19 @@ impl<'a> Executor<'a> {
 
                 let value = match self.engine.get(&key) {
 
-                    Some(crate::engine::Value::Data(data)) => data,
+                    Some(Value::Data(data)) => data,
 
-                    Some(crate::engine::Value::Tombstone) | None => {
+                    Some(Value::Tombstone) | None => {
                         return QueryResult::Rows(vec![]);
                     }
                 };
 
                 let row = Row::deserialize(&value);
 
-                let mut values = Vec::new();
-
-                for column in &stmt.columns {
-
-                    match column {
-
-                        SelectItem::Wildcard => {
-
-                            for (_, value) in &row.values {
-
-                                match value {
-
-                                    RowValue::Integer(i) => {
-                                        values.push(i.to_string());
-                                    }
-
-                                    RowValue::Text(s) => {
-                                        values.push(s.clone());
-                                    }
-                                }
-                            }
-                        }
-
-                        SelectItem::Column(name) => {
-
-                            match row.get(name) {
-
-                                Some(RowValue::Integer(i)) => {
-                                    values.push(i.to_string());
-                                }
-
-                                Some(RowValue::Text(s)) => {
-                                    values.push(s.clone());
-                                }
-
-                                None => {
-                                    values.push("NULL".into());
-                                }
-                            }
-                        }
-                    }
-                }
+                let values = self.project_row(
+                    &row,
+                    &stmt.columns,
+                );
 
                 return QueryResult::Rows(vec![values]);
             }
@@ -321,30 +360,15 @@ impl<'a> Executor<'a> {
         // FALLBACK : TABLE SCAN
         //----------------------------------------------------------
 
-        let rows = match self.scan_table(&stmt.table_name) {
+        let rows = match &stmt.where_clause {
 
-            Ok(rows) => rows,
+            Some(expr) => {
 
-            Err(err) => {
-                return QueryResult::Message(format!(
-                    "Error: {}",
-                    err
-                ));
-            }
-        };
-
-        let mut result = Vec::new();
-
-        for row in rows {
-
-            if let Some(expr) = &stmt.where_clause {
-
-                match ExpressionEvaluator::evaluate(&row, expr) {
-
-                    Ok(true) => {}
-
-                    Ok(false) => continue,
-
+                match self.matching_rows(
+                    &stmt.table_name,
+                    expr,
+                ) {
+                    Ok(rows) => rows,
                     Err(err) => {
                         return QueryResult::Message(format!(
                             "Error: {}",
@@ -354,50 +378,32 @@ impl<'a> Executor<'a> {
                 }
             }
 
-            let mut values = Vec::new();
+            None => {
 
-            for column in &stmt.columns {
+                match self.scan_table(&stmt.table_name) {
 
-                match column {
+                    Ok(rows) => rows,
 
-                    SelectItem::Wildcard => {
-
-                        for (_, value) in &row.values {
-
-                            match value {
-
-                                RowValue::Integer(i) => {
-                                    values.push(i.to_string());
-                                }
-
-                                RowValue::Text(s) => {
-                                    values.push(s.clone());
-                                }
-                            }
-                        }
-                    }
-
-                    SelectItem::Column(name) => {
-
-                        match row.get(name) {
-
-                            Some(RowValue::Integer(i)) => {
-                                values.push(i.to_string());
-                            }
-
-                            Some(RowValue::Text(s)) => {
-                                values.push(s.clone());
-                            }
-
-                            None => {
-                                values.push("NULL".into());
-                            }
-                        }
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err
+                        ));
                     }
                 }
             }
+        };
 
-            result.push(values);
+        let mut result = Vec::new();
+
+        for (_, row) in rows {
+
+            result.push(
+                self.project_row(
+                    &row,
+                    &stmt.columns,
+                )
+            );
         }
 
         QueryResult::Rows(result)
@@ -428,22 +434,87 @@ impl<'a> Executor<'a> {
             }
         };
 
-        let key = match table.storage_key_from_expr(&where_clause) {
-            Ok(key) => key,
+        //----------------------------------------------------------
+        // FAST PATH (PRIMARY KEY LOOKUP)
+        //----------------------------------------------------------
+
+        if self.can_use_primary_key_lookup(
+            &table,
+            &where_clause,
+        ) {
+
+            let key = match table.storage_key_from_expr(
+                &where_clause,
+            ) {
+                Ok(key) => key,
+
+                Err(err) => {
+                    return QueryResult::Message(format!(
+                        "Error: {}",
+                        err
+                    ));
+                }
+            };
+
+            match self.engine.delete(key) {
+
+                Ok(_) => {
+                    return QueryResult::Message(
+                        "1 row deleted".into(),
+                    );
+                }
+
+                Err(err) => {
+                    return QueryResult::Message(format!(
+                        "Error: {}",
+                        err
+                    ));
+                }
+            }
+        }
+
+        //----------------------------------------------------------
+        // FALLBACK : TABLE SCAN
+        //----------------------------------------------------------
+
+        let rows = match self.matching_rows(
+            &stmt.table_name,
+            &where_clause,
+        ) {
+
+            Ok(rows) => rows,
+
             Err(err) => {
-                return QueryResult::Message(format!("Error: {}", err));
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
             }
         };
 
-        match self.engine.delete(key) {
-            Ok(_) => QueryResult::Message(
-                "Row deleted successfully".into(),
-            ),
-            Err(err) => QueryResult::Message(format!(
-                "Error: {}",
-                err
-            )),
+        if rows.is_empty() {
+            return QueryResult::Message(
+                "0 rows deleted".into(),
+            );
         }
+
+        let deleted = rows.len();
+
+        for (key, _) in rows {
+
+            if let Err(err) = self.engine.delete(key) {
+
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+        }
+
+        QueryResult::Message(format!(
+            "{} row(s) deleted",
+            deleted,
+        ))
     }
 
     pub fn execute_update(
@@ -473,70 +544,176 @@ impl<'a> Executor<'a> {
             }
         };
 
-        // Build storage key from WHERE
-        let key = match table.storage_key_from_expr(&where_clause) {
-            Ok(key) => key,
+        //----------------------------------------------------------
+        // FAST PATH (PRIMARY KEY LOOKUP)
+        //----------------------------------------------------------
+
+        if self.can_use_primary_key_lookup(&table, &where_clause) {
+
+            let key = match table.storage_key_from_expr(&where_clause) {
+                Ok(key) => key,
+                Err(err) => {
+                    return QueryResult::Message(format!(
+                        "Error: {}",
+                        err
+                    ));
+                }
+            };
+
+            let row_data = match self.engine.get(&key) {
+
+                Some(Value::Data(data)) => data,
+
+                _ => {
+                    return QueryResult::Message(
+                        "Error: row not found".into(),
+                    );
+                }
+            };
+
+            let mut row = Row::deserialize(&row_data);
+
+            let pk_name = schema
+                .primary_key()
+                .expect("table should have a primary key")
+                .name
+                .clone();
+
+            for assignment in &stmt.assignments {
+
+                if assignment.column == pk_name {
+
+                    return QueryResult::Message(
+                        "Error: updating the primary key is not supported".into(),
+                    );
+                }
+
+                let value = match &assignment.value {
+
+                    Expr::Number(n) => RowValue::Integer(*n),
+
+                    Expr::String(s) => RowValue::Text(s.clone()),
+
+                    _ => {
+                        return QueryResult::Message(
+                            "Error: unsupported expression".into(),
+                        );
+                    }
+                };
+
+                if let Err(_) = row.update(
+                    &assignment.column,
+                    value,
+                ) {
+                    return QueryResult::Message(format!(
+                        "Error: unknown column '{}'",
+                        assignment.column
+                    ));
+                }
+            }
+
+            let serialized = row.serialize();
+
+            if let Err(err) = self.engine.put(
+                key,
+                serialized,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
+            return QueryResult::Message(
+                "1 row updated".into(),
+            );
+        }
+
+        //----------------------------------------------------------
+        // FALLBACK : TABLE SCAN
+        //----------------------------------------------------------
+
+        let rows = match self.matching_rows(
+            &stmt.table_name,
+            &where_clause,
+        ) {
+            Ok(rows) => rows,
+
             Err(err) => {
-                return QueryResult::Message(format!("Error: {}", err));
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
             }
         };
 
-        // Read existing row
-        let row_data = match self.engine.get(&key) {
-            Some(crate::engine::Value::Data(data)) => data,
-            _ => {
-                return QueryResult::Message(
-                    "Error: row not found".into(),
-                );
-            }
-        };
+        if rows.is_empty() {
 
-        // Deserialize
-        let mut row = Row::deserialize(&row_data);
+            return QueryResult::Message(
+                "0 rows updated".into(),
+            );
+        }
 
-        // Primary key name
+        let updated = rows.len();
+
         let pk_name = schema
             .primary_key()
             .expect("table should have a primary key")
             .name
             .clone();
 
-        // Apply assignments
-        for assignment in stmt.assignments {
-            // Don't allow PK updates
-            if assignment.column == pk_name {
-                return QueryResult::Message(
-                    "Error: updating the primary key is not supported".into(),
-                );
-            }
+        for (key, mut row) in rows {
 
-            let value = match assignment.value {
-                Expr::Number(n) => RowValue::Integer(n),
-                Expr::String(s) => RowValue::Text(s),
-                _ => {
+            for assignment in &stmt.assignments {
+
+                if assignment.column == pk_name {
+
                     return QueryResult::Message(
-                        "Error: unsupported expression".into(),
+                        "Error: updating the primary key is not supported".into(),
                     );
                 }
-            };
 
-            if let Err(_) = row.update(&assignment.column, value) {
+                let value = match &assignment.value {
+
+                    Expr::Number(n) => RowValue::Integer(*n),
+
+                    Expr::String(s) => RowValue::Text(s.clone()),
+
+                    _ => {
+                        return QueryResult::Message(
+                            "Error: unsupported expression".into(),
+                        );
+                    }
+                };
+
+                if let Err(_) = row.update(
+                    &assignment.column,
+                    value,
+                ) {
+                    return QueryResult::Message(format!(
+                        "Error: unknown column '{}'",
+                        assignment.column
+                    ));
+                }
+            }
+
+            let serialized = row.serialize();
+
+            if let Err(err) = self.engine.put(
+                key,
+                serialized,
+            ) {
                 return QueryResult::Message(format!(
-                    "Error: unknown column '{}'",
-                    assignment.column
+                    "Error: {}",
+                    err
                 ));
             }
         }
 
-        // Write updated row
-        let serialized = row.serialize();
-
-        if let Err(err) = self.engine.put(key, serialized) {
-            return QueryResult::Message(format!("Error: {}", err));
-        }
-
-        QueryResult::Message(
-            "Row updated successfully".into(),
-        )
+        QueryResult::Message(format!(
+            "{} row(s) updated",
+            updated,
+        ))
     }
+
 }
