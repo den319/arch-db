@@ -22,8 +22,8 @@
 - [x] CREATE TABLE
 - [x] INSERT
 - [x] SELECT (primary key lookup + full table scan)
-- [x] UPDATE (primary key lookup only)
-- [x] DELETE (primary key lookup only)
+- [x] UPDATE (primary key lookup + full table scan)
+- [x] DELETE (primary key lookup + full table scan)
 - [x] Comparison operators (=, !=, >, >=, <, <=)
 - [x] Expression evaluator (WHERE clause filtering)
 - [x] Catalog (table schema metadata)
@@ -32,8 +32,8 @@
 ## Remaining Work (By Phase)
 
 ### Phase 1 — Core SQL Operations
-- [ ] UPDATE with full table scan — scan all rows, evaluate WHERE, update matching rows
-- [ ] DELETE with full table scan — scan all rows, evaluate WHERE, delete matching rows
+- [x] UPDATE with full table scan — scan all rows, evaluate WHERE, update matching rows
+- [x] DELETE with full table scan — scan all rows, evaluate WHERE, delete matching rows
 - [ ] SQL CLI — replace raw Command interface with SQL-based REPL
 
 ### Phase 2 — Query Features

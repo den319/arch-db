@@ -50,11 +50,17 @@ By providing a single `UnifiedStorageIterator` that handles all of this internal
 
 ---
 
-## Why UPDATE has fast path + slow path?
+## Why UPDATE and DELETE have fast path + slow path?
 
-**Decision:** Implement `execute_update` (and `execute_delete`) with two execution strategies.
+**Decision:** Implement `execute_update` and `execute_delete` with two execution strategies.
 
-**Reason:** The most common UPDATE/DELETE pattern is modifying a single row by its primary key (e.g., `UPDATE users SET name = 'X' WHERE id = 5`). This can be handled with a direct `Engine.get()` + `Engine.put()` — O(log n) with minimal I/O. Supporting full table scans for arbitrary WHERE clauses adds flexibility without penalizing the common case. This pattern mirrors the SELECT implementation and will be extended when full scan support is added.
+**Reason:** The most common UPDATE/DELETE pattern is modifying a single row by its primary key (e.g., `UPDATE users SET name = 'X' WHERE id = 5`). This can be handled with a direct `Engine.get()` + `Engine.put()` — O(log n) with minimal I/O. Supporting full table scans for arbitrary WHERE clauses adds flexibility without penalizing the common case.
+
+Both operations follow the same pattern as SELECT:
+- **Fast path**: When WHERE is `primary_key = <literal>`, do a direct key lookup
+- **Slow path**: For all other conditions (non-PK WHERE, range conditions), do a full table scan via `Engine.iter()`, evaluate the WHERE clause with `ExpressionEvaluator`, and apply the operation to matching rows
+
+DELETE writes a Tombstone for each matching key. UPDATE deserializes the row, applies SET assignments, re-serializes, and writes back. Both require a WHERE clause — operations without one are rejected.
 
 ---
 
@@ -145,3 +151,11 @@ Using a single enum type allows the executor to return the appropriate result ty
 **Decision:** Use a simple text format: `"column1=i:42|column2=t:hello"`.
 
 **Reason:** At this stage of the project, a custom format avoids external dependencies (protobuf, flatbuffers, cap'n proto) and keeps the code self-contained. The format is easy to debug — you can read serialized rows directly. When the database needs to support schema evolution, migration, or cross-language compatibility, a structured serialization format should be adopted. For now, the simplicity is worth the trade-off.
+
+---
+
+## Why does `SELECT *` return columns in CREATE TABLE order instead of alphabetical order?
+
+**Decision:** When projecting rows with `SelectItem::Wildcard`, iterate over the schema's column list rather than the row's internal BTreeMap.
+
+**Reason:** The `Row` type stores values in a `BTreeMap<String, RowValue>`, which iterates in alphabetical key order. If `SELECT *` used BTreeMap order, columns would appear in alphabetical order (e.g., `age` before `id`), which is confusing to users who defined columns in a specific order in `CREATE TABLE`. By iterating over the schema's column list (which preserves CREATE TABLE order), the output matches user expectations. This also matches the behavior of most SQL databases, where `SELECT *` returns columns in table definition order.

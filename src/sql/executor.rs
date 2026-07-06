@@ -178,6 +178,7 @@ impl<'a> Executor<'a> {
         &self,
         row: &Row,
         columns: &[SelectItem],
+        schema_columns: &[Column],
     ) -> Vec<String> {
 
         let mut values = Vec::new();
@@ -188,16 +189,20 @@ impl<'a> Executor<'a> {
 
                 SelectItem::Wildcard => {
 
-                    for (_, value) in &row.values {
+                    for col in schema_columns {
 
-                        match value {
+                        match row.get(&col.name) {
 
-                            RowValue::Integer(i) => {
+                            Some(RowValue::Integer(i)) => {
                                 values.push(i.to_string());
                             }
 
-                            RowValue::Text(s) => {
+                            Some(RowValue::Text(s)) => {
                                 values.push(s.clone());
+                            }
+
+                            None => {
+                                values.push("NULL".into());
                             }
                         }
                     }
@@ -350,6 +355,7 @@ impl<'a> Executor<'a> {
                 let values = self.project_row(
                     &row,
                     &stmt.columns,
+                    &schema.columns,
                 );
 
                 return QueryResult::Rows(vec![values]);
@@ -402,6 +408,7 @@ impl<'a> Executor<'a> {
                 self.project_row(
                     &row,
                     &stmt.columns,
+                    &schema.columns,
                 )
             );
         }

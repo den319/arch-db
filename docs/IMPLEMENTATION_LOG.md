@@ -120,6 +120,36 @@
 - Created IMPLEMENTATION_LOG.md with chronological development history
 - Created DESIGN_DECISIONS.md with rationale for key design choices
 
+### 2026-07-06 — Full Table Scans for DELETE & UPDATE
+- Implemented `execute_delete` with fast/slow paths:
+  - Fast path: primary key lookup → direct Engine.delete() 
+  - Slow path: full table scan via Engine.iter() + ExpressionEvaluator
+- Implemented `execute_update` with fast/slow paths:
+  - Fast path: primary key lookup → Engine.get() + apply + Engine.put()
+  - Slow path: full table scan via Engine.iter() + ExpressionEvaluator
+- Both DELETE and UPDATE require a WHERE clause (rejected without one)
+- UPDATE disallows modifying the primary key column
+- Full table scan path scans all data (memtable + SSTables) and applies WHERE filtering
+- Added helper methods `scan_table()` and `matching_rows()` shared across SELECT/DELETE/UPDATE
+
+### 2026-07-06 — Extended Test Coverage
+- Added tests for DELETE with primary key lookup
+- Added tests for DELETE with non-primary key WHERE (full scan)
+- Added tests for DELETE multiple matching rows
+- Added tests for DELETE across memtable and SSTable boundaries
+- Added tests for DELETE after flush
+- Added tests for DELETE with all comparison operators (>, >=, <, <=, !=)
+- Added tests for DELETE with no matching rows
+- Added tests for DELETE from missing table
+- Added tests for DELETE without WHERE clause
+- Added tests for UPDATE with existing/non-existing rows
+- Added tests for UPDATE multiple columns
+- Added tests for UPDATE primary key rejection
+- Added tests for SELECT with non-primary-key WHERE (using full table scan)
+- Added tests for SELECT all rows across memtable + SSTable
+- Fixed SELECT column ordering: `SELECT *` now returns columns in CREATE TABLE order instead of BTreeMap alphabetical order
+- Fixed project_row() to accept schema column list for correct wildcard projection
+
 ## Known Issues & Technical Debt
 - `MergeIterator` is no longer used directly (replaced by `UnifiedStorageIterator`) — should be removed
 - `engine_iterator.rs` wraps `UnifiedStorageIterator` with minimal logic — could be inlined

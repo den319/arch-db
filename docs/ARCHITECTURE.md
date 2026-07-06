@@ -138,6 +138,53 @@ execute_select(stmt)
 
 This optimization is significant: primary key lookups avoid reading all SSTable blocks, while full scans must iterate over every row in the database.
 
+### Executor Flow (DELETE)
+
+```
+execute_delete(stmt)
+  ├─ Lookup table schema from Catalog
+  ├─ Require WHERE clause (DELETE without WHERE is rejected)
+  │
+  ├─ FAST PATH (Primary Key Lookup):
+  │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Direct key lookup via Engine.get()
+  │   → Write Tombstone via Engine.delete()
+  │   → Return "1 row deleted"
+  │
+  └─ SLOW PATH (Full Table Scan):
+      Condition: Non-PK WHERE or range conditions
+      → Full scan via Engine.iter() over all data
+      → For each row matching the table's key prefix:
+        → Evaluate WHERE clause via ExpressionEvaluator
+        → Collect matching keys
+      → Write Tombstone for each matching key via Engine.delete()
+      → Return "{n} row(s) deleted"
+```
+
+### Executor Flow (UPDATE)
+
+```
+execute_update(stmt)
+  ├─ Lookup table schema from Catalog
+  ├─ Require WHERE clause (UPDATE without WHERE is rejected)
+  │
+  ├─ FAST PATH (Primary Key Lookup):
+  │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Direct key lookup via Engine.get()
+  │   → Apply SET assignments to deserialized row
+  │   → Re-serialize and write back via Engine.put()
+  │   → Return "1 row updated"
+  │
+  └─ SLOW PATH (Full Table Scan):
+      Condition: Non-PK WHERE or range conditions
+      → Full scan via Engine.iter() over all data
+      → For each row matching the table's key prefix:
+        → Evaluate WHERE clause via ExpressionEvaluator
+        → Apply SET assignments to matching rows
+        → Re-serialize and write back via Engine.put()
+      → Return "{n} row(s) updated"
+```
+
 ### Key Data Structures
 
 ```rust
@@ -180,7 +227,11 @@ Example: `"users:42"`, `"products:abc123"`
 - `i:` prefix for integers
 - `t:` prefix for text
 - `|` separator between columns
-- Columns are sorted by name (BTreeMap guarantees order)
+- Columns are stored in BTreeMap order (alphabetical) in the serialized format
+
+### Column Ordering in Query Results
+
+When projecting rows with `SELECT *` (Wildcard), columns are returned in the order they were defined in `CREATE TABLE`, not in alphabetical order. This is achieved by iterating over the schema's column list rather than the row's internal BTreeMap. For explicit column selection (`SELECT col1, col2`), columns are returned in the order specified in the query.
 
 ## Iterator Hierarchy
 
@@ -194,9 +245,12 @@ StorageIterator (trait)
 
 ## Current Limitations
 
-- UPDATE and DELETE only work with primary key equality WHERE clauses (no full scan yet)
 - No ORDER BY or LIMIT support
 - No secondary indexes
 - Primary key is implicitly the first column (no explicit PK syntax)
 - No transaction support
 - CLI uses raw Command interface, not SQL
+- MergeIterator is no longer used (replaced by UnifiedStorageIterator) — should be removed
+- Parser panics on syntax errors instead of returning Result
+- memtable_limit is hardcoded to 1000
+- Block cache size is hardcoded to 64 blocks
