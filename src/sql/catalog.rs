@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{engine::{Engine, Value}, sql::ast::{self, DataType}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::Result, sql::ast::{self, DataType}, storage_iterator::StorageIterator};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogDataType {
@@ -55,7 +55,7 @@ impl Catalog {
     pub fn create_table(
         &mut self,
         schema: TableSchema,
-    ) -> Result<(), String> {
+    ) -> std::result::Result<(), String> {
 
         if self.tables.contains_key(&schema.name) {
             return Err("table already exists".into());
@@ -83,7 +83,7 @@ impl Catalog {
     pub fn load_from_engine(
         &mut self,
         engine: &mut Engine,
-    ) -> Result<()``> {
+    ) -> Result<()> {
 
         let mut iter = engine.iter()?;
 

@@ -24,6 +24,7 @@ fn test_engine_iterator_memtable() {
     let mut iter = engine.iter().unwrap();
 
     let r = iter.next().unwrap().unwrap();
+    println!("key: {:?}", r);
     assert_eq!(r.key, "a");
     assert_eq!(r.value, Value::Data("1".to_string()));
 

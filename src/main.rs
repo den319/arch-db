@@ -1,6 +1,6 @@
 use std::{io::{self, Write}};
 
-use arch_db::{command::Command, engine::Engine, parser::parse, sql::{catalog::Catalog, executor::Executor, lexer::Lexer, sql_parser::SQLParser}, sstable_manager::{ManifestRecord, init_sstable_counter, next_sstable_id}, storage::{self, Storage}};
+use arch_db::{command::Command, engine::Engine, parser::parse, sql::{catalog::Catalog, executor::Executor, lexer::Lexer, sql_parser::SQLParser}, sstable_manager::{ManifestRecord, init_sstable_counter, next_sstable_id}};
 
 
 fn main() {
@@ -55,18 +55,9 @@ fn main() {
         }
     }
 
-    let mut storage= Storage::new("storage/temp", storage::SyncPolicy::Always).expect("Failed to intialize storage!");
-
-    let commands= storage.load().expect("Failed to load database!");
-
-    for command in commands {
-
-        match command {
-            Command::Set(_, _) | Command::Del(_) => {
-                engine.execute(command);
-            }
-            _=> {}
-        }
+    if let Err(err) = catalog.load_from_engine(&mut engine) {
+        println!("Failed to load catalog: {}", err);
+        return;
     }
 
     
@@ -102,38 +93,20 @@ fn main() {
         // println!("input: {:?}, command: {:?}", &input, command);
 
         match &command {
-            Command::Set(_, _) | Command::Del(_) => {
-                storage.append(&command).expect("Failed to write log!");
-            }
             Command::Exit => {
-                if !engine.memtable.is_empty() {
-                    let file= format!("sst_l0_{}.bin", next_sstable_id());
-    
-                    match engine.flush_to_sstable(&file) {
-                        Ok(_) => {
-                            storage.reset()
-                                .expect("Failed to reset WAL");
-                        }
-                        Err(e) => {
-                            println!("Flush failed: {}", e);
-                        }
-                    }
-                    storage.checkpoint().expect("WAL checkpoint failed");
+                if let Err(err) = engine.shutdown() {
+                    println!("Shutdown failed: {}", err);
                 }
+
                 println!("Bye!");
                 break;
             }
             _=>{}
         }
 
-        let is_write = matches!(command, Command::Set(_, _) | Command::Del(_));
 
         if let Some(output) = engine.execute(command) {
             println!("{}", output);
-        }
-
-        if is_write {
-            engine.maybe_flush().expect("Flush failed!");
         }
     }
 }

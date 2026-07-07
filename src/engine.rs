@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
+use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage::{Storage, SyncPolicy}, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
 use crate::{
     bloom_filter::BloomFilter,
     cache::CacheKey,
@@ -32,6 +32,7 @@ pub struct Engine {
     pub memtable_limit: usize,
     pub compaction_tx: Sender<()>,
     pub block_cache: BlockCache,
+    pub storage: Storage,
 }
 
 #[derive(Clone, Debug)]
@@ -83,16 +84,38 @@ impl Engine {
             }
         });
 
-        Self {
+        let mut engine = Self {
+
             memtable: BTreeMap::new(),
             sstables: shared_sstables,
             memtable_limit: 1000,
             compaction_tx: tx,
-            block_cache: BlockCache::new(64), // 64 blocks
-        }
+            block_cache: BlockCache::new(64),
+
+            storage: Storage::new(
+                "storage/temp",
+                SyncPolicy::Always,
+            )
+            .expect("Failed to initialize WAL"),
+        };
+
+        engine
+            .replay_wal()
+            .expect("Failed to replay WAL");
+
+        engine
     }
 
     pub fn put(&mut self, key: String, value: String) -> Result<()> {
+
+        // write-ahead log
+        self.storage.append(
+            &Command::Set(
+                key.clone(),
+                value.clone(),
+            ),
+        )?;
+
         self.memtable.insert(key, Value::Data(value));
 
         self.maybe_flush()?;
@@ -105,9 +128,35 @@ impl Engine {
     }
 
     pub fn delete(&mut self, key: String) -> Result<()> {
+
+        // WAL
+        self.storage.append(
+            &Command::Del(key.clone()),
+        )?;
+
         self.memtable.insert(key, Value::Tombstone);
 
         self.maybe_flush()?;
+
+        Ok(())
+    }
+
+    pub fn shutdown(&mut self) -> Result<()> {
+
+        if self.memtable.is_empty() {
+            return Ok(());
+        }
+
+        let file = format!(
+            "sst_l0_{}.bin",
+            next_sstable_id()
+        );
+
+        self.flush_to_sstable(&file)?;
+
+        self.storage.reset()?;
+
+        self.storage.checkpoint()?;
 
         Ok(())
     }
@@ -410,5 +459,34 @@ impl Engine {
         // let merge = MergeIterator::new(iterators, false)?;
 
         UnifiedStorageIterator::new(iterators)
+    }
+
+    fn replay_wal(&mut self) -> Result<()> {
+
+        let commands = self.storage.load()?;
+
+        for command in commands {
+
+            match command {
+
+                Command::Set(key, value) => {
+                    self.memtable.insert(
+                        key,
+                        Value::Data(value),
+                    );
+                }
+
+                Command::Del(key) => {
+                    self.memtable.insert(
+                        key,
+                        Value::Tombstone,
+                    );
+                }
+
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 }
