@@ -1,5 +1,3 @@
-
-
 use std::{io::{self, Write}};
 
 use arch_db::{command::Command, engine::Engine, parser::parse, sql::{catalog::Catalog, executor::Executor, lexer::Lexer, sql_parser::SQLParser}, sstable_manager::{ManifestRecord, init_sstable_counter, next_sstable_id}, storage::{self, Storage}};
@@ -11,11 +9,6 @@ fn main() {
     let mut engine = Engine::new();
 
     let mut catalog = Catalog::new();
-
-    let mut executor = Executor::new(
-        &mut catalog,
-        &mut engine,
-    );
 
     // Replay manifest to restore known SSTables
     // Uses load_table_metadata with manifest's stored min_key/max_key/file_size
@@ -91,7 +84,12 @@ fn main() {
 
             let mut parser = SQLParser::new(lexer);
 
-            let statement = parser.parse();
+            let statement = parser.parse_statement();
+
+            let mut executor = Executor::new(
+                &mut catalog,
+                &mut engine,
+            );
 
             let result = executor.execute(statement);
 

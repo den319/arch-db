@@ -1,4 +1,4 @@
-use arch_db::sql::{ast::{Assignment, BinaryOperator, DataType, Expr, SelectItem, Statement}, lexer::Lexer, sql_parser::Parser};
+use arch_db::sql::{ast::{Assignment, BinaryOperator, DataType, Expr, SelectItem, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser};
 
 
 

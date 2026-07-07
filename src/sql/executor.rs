@@ -249,13 +249,28 @@ impl<'a> Executor<'a> {
             .collect();
 
         let schema = TableSchema {
-            name: stmt.table_name,
+            name: stmt.table_name.clone(),
             columns,
         };
 
-        self.catalog.create_table(schema)
+        self.catalog.create_table(schema.clone())
             .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
 
+        let storage_key = format!(
+            "__schema__:{}",
+            stmt.table_name
+        );
+        let serialized = schema.serialize();
+
+        if let Err(err) = self.engine.put(
+            storage_key,
+            serialized,
+        ) {
+            return Err(DatabaseError::Other(
+                format!("Error: {}", err)
+            ));
+        }
+        
         Ok(QueryResult::Message(
             "Table created successfully".into(),
         ))

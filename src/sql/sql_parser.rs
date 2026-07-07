@@ -71,7 +71,7 @@ impl SQLParser {
         }
     }
 
-    pub fn parse(&mut self) -> Statement {
+    pub fn parse_statement(&mut self) -> Statement {
         match self.current_token {
             Token::Select => self.parse_select(),
 

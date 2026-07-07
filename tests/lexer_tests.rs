@@ -1,4 +1,4 @@
-use arch_db::sql::{ast::{BinaryOperator, Expr, Statement}, lexer::Lexer, sql_parser::Parser, token::Token};
+use arch_db::sql::{ast::{BinaryOperator, Expr, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser, token::Token};
 
 
 #[test]
