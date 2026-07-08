@@ -310,11 +310,66 @@ impl SQLParser {
                 None
             };
 
+        let order_by = if self.current_token == Token::Order {
+
+            self.advance();
+
+            self.expect(Token::By);
+
+            let column = self.parse_identifier();
+
+            let direction = match self.current_token {
+
+                Token::Desc => {
+                    self.advance();
+                    OrderDirection::Desc
+                }
+
+                Token::Asc => {
+                    self.advance();
+                    OrderDirection::Asc
+                }
+
+                _ => OrderDirection::Asc,
+            };
+
+            Some(OrderBy {
+                column,
+                direction,
+            })
+
+        } else {
+
+            None
+        };
+
+        let limit = if self.current_token == Token::Limit {
+
+            self.advance();
+
+            match self.current_token.clone() {
+
+                Token::Number(n) => {
+
+                    self.advance();
+
+                    Some(n as usize)
+                }
+
+                _ => panic!("Expected number after LIMIT"),
+            }
+
+        } else {
+
+            None
+        };
 
         Statement::Select(Select {
             columns,
             table_name,
             where_clause,
+            order_by,
+            limit
         })
     }
 

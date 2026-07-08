@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::fs;
+use std::{fs, path::Path};
 
 use arch_db::bloom_filter::BloomFilter;
 
@@ -7,6 +7,32 @@ use arch_db::command::Command;
 use arch_db::engine::{Engine, Value};
 use arch_db::sstable_manager::{init_sstable_counter, SSTable, Level};
 use arch_db::helper::unique_file;
+
+/// Clean up all persistent state from previous test runs.
+fn clean_all_state() {
+    // Remove WAL storage directory contents
+    let path = Path::new("storage/temp");
+    if path.exists() {
+        for entry in fs::read_dir(path).into_iter().flatten() {
+            if let Ok(entry) = entry {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    // Remove stale SSTable files
+    for entry in fs::read_dir(".").into_iter().flatten() {
+        if let Ok(entry) = entry {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("sst_") && name.ends_with(".bin") {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    // Remove manifest files
+    fs::remove_file("MANIFEST.log").ok();
+    fs::remove_file("MANIFEST.checkpoint").ok();
+}
 
 /// Initialize the global SSTABLE_COUNTER exactly once across all parallel tests,
 /// ensuring no test creates files that collide with each other or with user data.
@@ -20,6 +46,7 @@ pub fn ensure_counter_initialized() {
 #[test]
 fn test_auto_flush_when_memtable_limit_reached() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
     engine.memtable_limit = 2;
@@ -56,6 +83,7 @@ fn test_auto_flush_when_memtable_limit_reached() {
 #[test]
 fn test_auto_flush_preserves_tombstones() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
     engine.memtable_limit = 2;
@@ -81,6 +109,7 @@ fn test_auto_flush_preserves_tombstones() {
 #[test]
 fn test_auto_l0_compaction_trigger() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -110,6 +139,7 @@ fn test_auto_l0_compaction_trigger() {
 #[test]
 fn test_shared_sstable_manager_access() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let engine = Engine::new();
 
@@ -124,6 +154,7 @@ fn test_shared_sstable_manager_access() {
 #[test]
 fn test_flush_with_shared_sstable_manager() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
     engine.memtable_limit = 2;
@@ -154,6 +185,7 @@ fn test_flush_with_shared_sstable_manager() {
 #[test]
 fn test_arc_shares_same_sstable_manager() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let engine = Engine::new();
 
@@ -185,6 +217,7 @@ fn test_arc_shares_same_sstable_manager() {
 #[test]
 fn test_multiple_lock_scopes() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -208,6 +241,7 @@ fn test_multiple_lock_scopes() {
 #[test]
 fn test_compaction_with_shared_manager() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -244,6 +278,7 @@ fn test_compaction_with_shared_manager() {
 // async notification works
 fn test_background_compaction_trigger() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -281,6 +316,7 @@ fn test_background_compaction_trigger() {
 // background compaction isolated
 fn test_writes_continue_during_background_compaction() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -319,6 +355,7 @@ fn test_writes_continue_during_background_compaction() {
 // no deadlock
 fn test_multiple_background_compaction_signals() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let engine = Engine::new();
 
@@ -332,6 +369,7 @@ fn test_multiple_background_compaction_signals() {
 #[test]
 fn test_put_stores_value() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -348,6 +386,7 @@ fn test_put_stores_value() {
 #[test]
 fn test_get_missing_key_returns_tombstone() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -360,6 +399,7 @@ fn test_get_missing_key_returns_tombstone() {
 #[test]
 fn test_delete_marks_key_as_tombstone() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -380,6 +420,7 @@ fn test_delete_marks_key_as_tombstone() {
 #[test]
 fn test_delete_nonexistent_key_creates_tombstone() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 
@@ -396,6 +437,7 @@ fn test_delete_nonexistent_key_creates_tombstone() {
 #[test]
 fn test_put_overwrites_existing_value() {
     ensure_counter_initialized();
+    clean_all_state();
 
     let mut engine = Engine::new();
 

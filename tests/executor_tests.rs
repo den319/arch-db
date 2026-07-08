@@ -1,8 +1,35 @@
+use std::path::Path;
+use std::fs;
+
 use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, CatalogDataType, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
 
+fn clean_all_state() {
+    let path = Path::new("storage/temp");
+    if path.exists() {
+        for entry in fs::read_dir(path).into_iter().flatten() {
+            if let Ok(entry) = entry {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    for entry in fs::read_dir(".").into_iter().flatten() {
+        if let Ok(entry) = entry {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("sst_") && name.ends_with(".bin") {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    fs::remove_file("MANIFEST.log").ok();
+    fs::remove_file("MANIFEST.checkpoint").ok();
+}
+
 fn make_engine() -> Engine {
+    clean_all_state();
     Engine::new()
 }
+
 
 
 #[test]
@@ -201,7 +228,7 @@ fn test_insert_in_table() {
 #[test]
 fn test_select_by_integer_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -254,7 +281,7 @@ fn test_select_by_integer_primary_key() {
 #[test]
 fn test_select_by_text_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -314,7 +341,7 @@ fn test_select_by_text_primary_key() {
 #[test]
 fn test_select_missing_table() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -343,7 +370,7 @@ fn test_select_missing_table() {
 #[test]
 fn test_select_missing_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -380,7 +407,7 @@ fn test_select_missing_row() {
 #[test]
 fn test_select_without_where_clause() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -409,7 +436,7 @@ fn test_select_without_where_clause() {
 #[test]
 fn test_select_with_invalid_where_clause() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -440,7 +467,7 @@ fn test_select_with_invalid_where_clause() {
 #[test]
 fn test_delete_existing_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -489,7 +516,7 @@ fn test_delete_existing_row() {
 #[test]
 fn test_delete_from_missing_table() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     let result = executor.execute(Statement::Delete(Delete {
@@ -512,7 +539,7 @@ fn test_delete_from_missing_table() {
 #[test]
 fn test_delete_without_where_clause() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -545,7 +572,7 @@ fn test_delete_without_where_clause() {
 #[test]
 fn test_delete_requires_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -582,7 +609,7 @@ fn test_delete_requires_primary_key() {
 #[test]
 fn test_delete_non_existing_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -622,7 +649,7 @@ fn test_delete_non_existing_row() {
 #[test]
 fn test_update_existing_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
@@ -718,7 +745,7 @@ fn test_update_existing_row() {
 #[test]
 fn test_update_non_existing_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
@@ -775,7 +802,7 @@ fn test_update_non_existing_row() {
 #[test]
 fn test_update_multiple_columns() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
@@ -879,7 +906,7 @@ fn test_update_multiple_columns() {
 #[test]
 fn test_update_does_not_change_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(
         &mut catalog,
@@ -948,7 +975,7 @@ fn test_update_does_not_change_primary_key() {
 #[test]
 fn test_select_all_rows() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -989,7 +1016,7 @@ fn test_select_all_rows() {
 #[test]
 fn test_select_all_empty_table() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1015,7 +1042,7 @@ fn test_select_all_empty_table() {
 #[test]
 fn test_select_all_single_row() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1049,7 +1076,7 @@ fn test_select_all_single_row() {
 #[test]
 fn test_select_all_multiple_rows() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1095,7 +1122,7 @@ fn test_select_all_multiple_rows() {
 #[test]
 fn test_select_all_skips_deleted_rows() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1143,7 +1170,7 @@ fn test_select_all_skips_deleted_rows() {
 #[test]
 fn test_select_all_after_update() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1190,7 +1217,7 @@ fn test_select_all_after_update() {
 #[test]
 fn test_select_all_after_multiple_updates() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1250,7 +1277,7 @@ fn test_select_all_after_multiple_updates() {
 #[test]
 fn test_select_all_after_flush() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1287,7 +1314,7 @@ fn test_select_all_after_flush() {
 #[test]
 fn test_select_all_only_requested_table() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1341,7 +1368,7 @@ fn test_select_all_only_requested_table() {
 #[test]
 fn test_select_all_from_memtable_and_sstable() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1400,7 +1427,7 @@ fn test_select_all_from_memtable_and_sstable() {
 #[test]
 fn test_select_specific_column_by_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1461,7 +1488,7 @@ fn test_select_specific_column_by_primary_key() {
 fn test_select_all_rows_without_where() {
 
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor =
         Executor::new(&mut catalog, &mut engine);
 
@@ -1534,7 +1561,7 @@ fn test_select_all_rows_without_where() {
 fn test_select_with_non_primary_key_where() {
 
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor =
         Executor::new(&mut catalog, &mut engine);
 
@@ -1631,7 +1658,7 @@ fn test_select_with_non_primary_key_where() {
 fn test_select_after_flush() {
 
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor =
         Executor::new(&mut catalog, &mut engine);
 
@@ -1697,7 +1724,7 @@ fn test_select_after_flush() {
 #[test]
 fn test_delete_by_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1750,7 +1777,7 @@ fn test_delete_by_primary_key() {
 #[test]
 fn test_delete_with_non_primary_key_where() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1833,7 +1860,7 @@ fn test_delete_with_non_primary_key_where() {
 #[test]
 fn test_delete_multiple_rows() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1903,7 +1930,7 @@ fn test_delete_multiple_rows() {
 #[test]
 fn test_delete_no_matching_rows() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -1961,7 +1988,7 @@ fn test_delete_no_matching_rows() {
 #[test]
 fn test_delete_after_flush() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -2019,7 +2046,7 @@ fn test_delete_after_flush() {
 #[test]
 fn test_delete_from_memtable_and_sstable() {
     let mut catalog = Catalog::new();
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
     executor.execute(Statement::CreateTable(CreateTable {
@@ -2103,7 +2130,7 @@ fn test_delete_comparison_operators() {
     for (op, value, expected_remaining, expected_ids) in operators {
 
         let mut catalog = Catalog::new();
-        let mut engine = Engine::new();
+        let mut engine = make_engine();
         let mut executor = Executor::new(&mut catalog, &mut engine);
 
         executor.execute(Statement::CreateTable(CreateTable {

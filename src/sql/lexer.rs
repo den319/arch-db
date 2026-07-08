@@ -156,6 +156,11 @@ impl Lexer {
             "INTO" => Token::Into,
             "VALUES" => Token::Values,
             "TABLE" => Token::Table,
+            "ORDER" => Token::Order,
+            "BY" => Token::By,
+            "LIMIT" => Token::Limit,
+            "ASC" => Token::Asc,
+            "DESC" => Token::Desc,
 
             _ => Token::Identifier(identifier.to_string()),
         }

@@ -41,6 +41,10 @@ pub struct Select {
     pub columns: Vec<SelectItem>,
     pub table_name: String,
     pub where_clause: Option<Expr>,
+
+    pub order_by: Option<OrderBy>,
+
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,4 +97,16 @@ pub enum BinaryOperator {
 
     LessThan,
     LessThanOrEqual,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderBy {
+    pub column: String,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderDirection {
+    Asc,
+    Desc,
 }

@@ -1,4 +1,4 @@
-use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateTable, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -415,20 +415,114 @@ impl<'a> Executor<'a> {
             }
         };
 
-        let mut result = Vec::new();
+        let mut filtered_rows = Vec::new();
 
         for (_, row) in rows {
 
-            result.push(
-                self.project_row(
-                    &row,
-                    &stmt.columns,
-                    &schema.columns,
-                )
-            );
+            // result.push(
+            //     self.project_row(
+            //         &row,
+            //         &stmt.columns,
+            //         &schema.columns,
+            //     )
+            // );
+
+            filtered_rows.push(row);
+        }
+
+        if let Some(order) = &stmt.order_by {
+
+            filtered_rows.sort_by(|left, right| {
+
+                let left_value = left.get(&order.column);
+
+                let right_value = right.get(&order.column);
+
+                match (left_value, right_value) {
+
+                    (
+                        Some(RowValue::Integer(a)),
+                        Some(RowValue::Integer(b)),
+                    ) => {
+
+                        match order.direction {
+
+                            OrderDirection::Asc => a.cmp(b),
+
+                            OrderDirection::Desc => b.cmp(a),
+                        }
+                    }
+
+                    (
+                        Some(RowValue::Text(a)),
+                        Some(RowValue::Text(b)),
+                    ) => {
+
+                        match order.direction {
+
+                            OrderDirection::Asc => a.cmp(b),
+
+                            OrderDirection::Desc => b.cmp(a),
+                        }
+                    }
+
+                    _ => std::cmp::Ordering::Equal,
+                }
+            });
+        }
+
+        let mut result = Vec::new();
+
+        for row in filtered_rows {
+
+            let mut values = Vec::new();
+
+            for column in &stmt.columns {
+
+                match column {
+
+                    SelectItem::Wildcard => {
+
+                        for (_, value) in &row.values {
+
+                            match value {
+
+                                RowValue::Integer(i) => {
+                                    values.push(i.to_string());
+                                }
+
+                                RowValue::Text(s) => {
+                                    values.push(s.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    SelectItem::Column(name) => {
+
+                        match row.get(name) {
+
+                            Some(RowValue::Integer(i)) => {
+                                values.push(i.to_string());
+                            }
+
+                            Some(RowValue::Text(s)) => {
+                                values.push(s.clone());
+                            }
+
+                            None => {
+                                values.push("NULL".into());
+                            }
+                        }
+                    }
+                }
+            }
+
+            result.push(values);
         }
 
         QueryResult::Rows(result)
+
     }
 
     pub fn execute_delete(

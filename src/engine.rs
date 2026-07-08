@@ -64,6 +64,10 @@ impl PartialOrd for ScanHeapItem {
 
 impl Engine {
     pub fn new() -> Self {
+        Self::with_storage_path("storage/temp")
+    }
+
+    pub fn with_storage_path(path: &str) -> Self {
         let (tx, rx) = mpsc::channel::<()>();
 
         let shared_sstables = Arc::new(Mutex::new(SSTableManager::new()));
@@ -93,7 +97,7 @@ impl Engine {
             block_cache: BlockCache::new(64),
 
             storage: Storage::new(
-                "storage/temp",
+                path,
                 SyncPolicy::Always,
             )
             .expect("Failed to initialize WAL"),

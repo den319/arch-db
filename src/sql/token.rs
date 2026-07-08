@@ -15,6 +15,11 @@ pub enum Token {
     From,
     Where,
     Table,
+    Order,
+    By,
+    Limit,
+    Asc,
+    Desc,
 
     // symbols
     LeftParen,
@@ -55,6 +60,13 @@ impl Display for Token {
             Token::From => write!(f, "FROM"),
             Token::Where => write!(f, "WHERE"),
             Token::Table => write!(f, "TABLE"),
+            Token::Order => write!(f, "ORDER"),
+            Token::By => write!(f, "BY"),
+            Token::Limit => write!(f, "LIMIT"),
+            Token::Asc => write!(f, "ASC"),
+            Token::Desc => write!(f, "DESC"),
+
+
 
             Token::LeftParen => write!(f, "("),
             Token::RightParen => write!(f, ")"),
