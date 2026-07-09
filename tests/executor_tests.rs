@@ -2,13 +2,14 @@ use std::path::Path;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use arch_db::sql::ast::{OrderBy, OrderDirection};
 use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, CatalogDataType, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn make_engine() -> Engine {
     let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let path = format!("storage/test_executor_{}", id);
+    let path = format!("storage/tests/test_executor_{}", id);
     let _ = fs::remove_dir_all(&path);
     Engine::with_storage_path(&path)
 }
@@ -2245,3 +2246,496 @@ fn test_delete_comparison_operators() {
         }
     }
 }
+
+#[test]
+fn test_select_limit() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for i in 1..=5 {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(i)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: None,
+        limit: Some(2),
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            assert_eq!(rows.len(), 2);
+
+            assert_eq!(rows[0][0], "1");
+            assert_eq!(rows[1][0], "2");
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+
+
+#[test]
+fn test_select_limit_zero() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for i in 1..=5 {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(i)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: None,
+        limit: Some(0),
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            assert_eq!(rows.len(), 0);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_limit_larger_than_table() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for i in 1..=5 {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(i)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: None,
+        limit: Some(100),
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            assert_eq!(rows.len(), 5);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_order_by_ascending() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    // Insert deliberately out of order.
+    for id in [5, 2, 4, 1, 3] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(id)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: Some(OrderBy {
+            column: "id".into(),
+            direction: OrderDirection::Asc,
+        }),
+        limit: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let ids: Vec<i64> = rows
+                .iter()
+                .map(|r| r[0].parse::<i64>().unwrap())
+                .collect();
+
+            assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_order_by_descending() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for id in [5, 2, 4, 1, 3] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(id)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: Some(OrderBy {
+            column: "id".into(),
+            direction: OrderDirection::Desc,
+        }),
+        limit: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let ids: Vec<i64> = rows
+                .iter()
+                .map(|r| r[0].parse::<i64>().unwrap())
+                .collect();
+
+            assert_eq!(ids, vec![5, 4, 3, 2, 1]);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_order_by_text() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+            },
+        ],
+    }));
+
+    let data = vec![
+        (1, "Charlie"),
+        (2, "Alice"),
+        (3, "Bob"),
+    ];
+
+    for (id, name) in data {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+            ],
+            values: vec![
+                Expr::Number(id),
+                Expr::String(name.into()),
+            ],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Column("name".into())],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: Some(OrderBy {
+            column: "name".into(),
+            direction: OrderDirection::Asc,
+        }),
+        limit: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let names: Vec<String> = rows
+                .iter()
+                .map(|r| r[0].clone())
+                .collect();
+
+            assert_eq!(
+                names,
+                vec![
+                    "Alice",
+                    "Bob",
+                    "Charlie",
+                ]
+            );
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_where_order_by() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for id in [5, 2, 4, 1, 3] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(id)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::GreaterThanOrEqual,
+            right: Box::new(Expr::Number(2)),
+        }),
+        order_by: Some(OrderBy {
+            column: "id".into(),
+            direction: OrderDirection::Desc,
+        }),
+        limit: None,
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let ids: Vec<i64> = rows
+                .iter()
+                .map(|r| r[0].parse::<i64>().unwrap())
+                .collect();
+
+            assert_eq!(ids, vec![5, 4, 3, 2]);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_order_by_limit() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for id in [5, 2, 4, 1, 3] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(id)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: None,
+        order_by: Some(OrderBy {
+            column: "id".into(),
+            direction: OrderDirection::Desc,
+        }),
+        limit: Some(2),
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let ids: Vec<i64> = rows
+                .iter()
+                .map(|r| r[0].parse::<i64>().unwrap())
+                .collect();
+
+            assert_eq!(ids, vec![5, 4]);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+
+#[test]
+fn test_select_where_order_by_limit() {
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+            },
+        ],
+    }));
+
+    for id in [5, 2, 4, 1, 3] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec!["id".into()],
+            values: vec![Expr::Number(id)],
+        }));
+    }
+
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        where_clause: Some(Expr::Binary {
+            left: Box::new(Expr::Identifier("id".into())),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expr::Number(1)),
+        }),
+        order_by: Some(OrderBy {
+            column: "id".into(),
+            direction: OrderDirection::Asc,
+        }),
+        limit: Some(2),
+    }));
+
+    match result {
+        QueryResult::Rows(rows) => {
+            let ids: Vec<i64> = rows
+                .iter()
+                .map(|r| r[0].parse::<i64>().unwrap())
+                .collect();
+
+            assert_eq!(ids, vec![2, 3]);
+        }
+
+        _ => panic!("Expected rows"),
+    }
+}
+

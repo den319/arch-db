@@ -37,8 +37,8 @@
 - [ ] SQL CLI — replace raw Command interface with SQL-based REPL
 
 ### Phase 2 — Query Features
-- [ ] ORDER BY — sort result sets
-- [ ] LIMIT — restrict number of returned rows
+- [x] ORDER BY — sort result sets (ASC/DESC per column)
+- [x] LIMIT — restrict number of returned rows
 
 ### Phase 3 — Indexing
 - [ ] Secondary indexes — non-primary key index support

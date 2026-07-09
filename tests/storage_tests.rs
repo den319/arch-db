@@ -7,7 +7,7 @@ use arch_db::helper::unique_dir;
 
 #[test]
 fn test_wal_reset() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     storage.append(&Command::Set("name".into(), "john".into())).unwrap();
@@ -21,7 +21,7 @@ fn test_wal_reset() {
 
 #[test]
 fn test_wal_recovery_after_restart() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     {
         let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
         storage.append(&Command::Set("user".into(), "john".into())).unwrap();
@@ -40,7 +40,7 @@ fn test_wal_recovery_after_restart() {
 
 #[test]
 fn test_wal_rotation_after_flush() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     storage.append(&Command::Set("a".into(), "1".into())).unwrap();
@@ -55,7 +55,7 @@ fn test_wal_rotation_after_flush() {
 
 #[test]
 fn test_wal_segment_rotation() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     let large_value = "x".repeat(1024 * 512);
@@ -68,7 +68,7 @@ fn test_wal_segment_rotation() {
 
 #[test]
 fn test_recovery_from_multiple_segments() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     {
         let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
         let large = "x".repeat(1024 * 512);
@@ -85,7 +85,7 @@ fn test_recovery_from_multiple_segments() {
 
 #[test]
 fn test_wal_rotation_preserves_data() {
-    let dir = unique_dir("storage/test");
+    let dir = unique_dir("storage/tests");
     let mut storage = Storage::new(&dir, SyncPolicy::Never).unwrap();
 
     for i in 0..100 {

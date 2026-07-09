@@ -150,6 +150,18 @@
 - Fixed SELECT column ordering: `SELECT *` now returns columns in CREATE TABLE order instead of BTreeMap alphabetical order
 - Fixed project_row() to accept schema column list for correct wildcard projection
 
+### 2026-07-08 — ORDER BY & LIMIT Implementation
+- Added `OrderBy` struct and `OrderDirection` enum (`Asc`/`Desc`) to AST
+- Added `order_by: Option<OrderBy>` and `limit: Option<usize>` fields to `Select` struct
+- Extended SQL parser with `ORDER BY column [ASC|DESC]` and `LIMIT n` clauses
+- Added `Order` and `Desc` token types to lexer
+- Implemented `execute_select` ORDER BY logic:
+  - Sorts result rows by the specified column using the row's internal values
+  - Supports ascending (default) and descending order
+- Implemented `execute_select` LIMIT logic:
+  - Truncates result rows to the specified limit after filtering and sorting
+- ORDER BY and LIMIT can be combined (LIMIT applied after ORDER BY)
+
 ### 2026-07-09 — Test Infrastructure & Compilation Fixes
 - Added `Engine::with_storage_path(path)` constructor for custom storage directories
 - Refactored `Engine::new()` to delegate to `with_storage_path("storage/temp")`

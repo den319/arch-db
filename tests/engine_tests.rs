@@ -13,7 +13,7 @@ static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn make_engine() -> Engine {
     let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let path = format!("storage/test_engine_{}", id);
+    let path = format!("storage/tests/test_engine_{}", id);
     let _ = fs::remove_dir_all(&path);
     Engine::with_storage_path(&path)
 }
