@@ -409,3 +409,14 @@ fn test_parse_missing_lhs() {
         parser.parse_statement();
     })).is_err());
 }
+
+#[test]
+fn test_primary_key_tokens() {
+    let mut lexer = Lexer::new(
+        "PRIMARY KEY"
+    );
+
+    assert_eq!(lexer.next_token(), Token::Primary);
+    assert_eq!(lexer.next_token(), Token::Key);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}

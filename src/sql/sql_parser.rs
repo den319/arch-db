@@ -115,9 +115,20 @@ impl SQLParser {
 
         let data_type = self.parse_data_type();
 
+        let mut primary_key= false;
+
+        if self.current_token == Token::Primary {
+            self.advance();
+
+            self.expect(Token::Key);
+
+            primary_key= true;
+        }
+
         ColumnDef {
             name,
             data_type,
+            primary_key,
         }
     }
 

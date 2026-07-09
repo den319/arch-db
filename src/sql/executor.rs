@@ -236,6 +236,28 @@ impl<'a> Executor<'a> {
         stmt: CreateTable,
     ) -> Result<QueryResult> {
 
+        let primary_key_count = stmt
+            .columns
+            .iter()
+            .filter(|column| column.primary_key)
+            .count();
+
+        match primary_key_count {
+            0 => {
+                return Err(DatabaseError::Other(
+                    "table must contain exactly one PRIMARY KEY".into(),
+                ));
+            }
+
+            1 => {}
+
+            _ => {
+                return Err(DatabaseError::Other(
+                    "multiple PRIMARY KEY columns are not allowed".into(),
+                ));
+            }
+        }
+
         let columns = stmt
             .columns
             .into_iter()
@@ -243,8 +265,8 @@ impl<'a> Executor<'a> {
             .map(|(i, column)| Column {
                 name: column.name,
                 data_type: column.data_type.into(),
-                primary_key: i == 0,
-                nullable: !(i == 0),
+                primary_key: column.primary_key,
+                nullable: !column.primary_key,
             })
             .collect();
 

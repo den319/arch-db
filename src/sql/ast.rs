@@ -21,6 +21,7 @@ pub struct CreateTable {
 pub struct ColumnDef {
     pub name: String,
     pub data_type: DataType,
+    pub primary_key: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

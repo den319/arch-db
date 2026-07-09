@@ -1019,3 +1019,88 @@ fn test_parse_select_order_by_limit() {
     }
 }
 
+#[test]
+fn test_parse_create_table_with_primary_key() {
+    let lexer = Lexer::new(
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::CreateTable(create) => {
+            assert_eq!(create.table_name, "users");
+
+            assert_eq!(create.columns.len(), 2);
+
+            assert_eq!(create.columns[0].name, "id");
+            assert_eq!(create.columns[0].data_type, DataType::Int);
+            assert!(create.columns[0].primary_key);
+
+            assert_eq!(create.columns[1].name, "name");
+            assert_eq!(create.columns[1].data_type, DataType::Text);
+            assert!(!create.columns[1].primary_key);
+        }
+
+        _ => panic!("Expected CREATE TABLE"),
+    }
+}
+
+#[test]
+fn test_parse_create_table_without_primary_key() {
+    let lexer = Lexer::new(
+        "CREATE TABLE users (
+            id INT,
+            name TEXT
+        );",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::CreateTable(create) => {
+            assert_eq!(create.columns.len(), 2);
+
+            assert!(!create.columns[0].primary_key);
+            assert!(!create.columns[1].primary_key);
+        }
+
+        _ => panic!("Expected CREATE TABLE"),
+    }
+}
+
+#[test]
+#[should_panic]
+fn test_parse_primary_without_key() {
+    let lexer = Lexer::new(
+        "CREATE TABLE users (
+            id INT PRIMARY
+        );",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    parser.parse_statement();
+}
+
+#[test]
+#[should_panic]
+fn test_parse_key_without_primary() {
+    let lexer = Lexer::new(
+        "CREATE TABLE users (
+            id INT KEY
+        );",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    parser.parse_statement();
+}
+

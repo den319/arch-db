@@ -162,6 +162,10 @@ impl Lexer {
             "ASC" => Token::Asc,
             "DESC" => Token::Desc,
 
+            "PRIMARY" => Token::Primary,
+            "KEY" => Token::Key,
+
+
             _ => Token::Identifier(identifier.to_string()),
         }
     }

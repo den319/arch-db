@@ -21,6 +21,9 @@ pub enum Token {
     Asc,
     Desc,
 
+    Primary,
+    Key,
+
     // symbols
     LeftParen,
     RightParen,
@@ -65,6 +68,10 @@ impl Display for Token {
             Token::Limit => write!(f, "LIMIT"),
             Token::Asc => write!(f, "ASC"),
             Token::Desc => write!(f, "DESC"),
+
+            Token::Primary => write!(f, "PRIMARY"),
+            Token::Key => write!(f, "KEY"),
+
 
 
 
