@@ -36,6 +36,14 @@ This document records the rationale behind key architectural and implementation 
 
 ---
 
+## Why Engine::with_storage_path() instead of always using "storage/temp"?
+
+**Decision:** Added a `with_storage_path(path)` constructor and refactored `new()` to delegate to it.
+
+**Reason:** Previously, all tests shared the same WAL storage path (`storage/temp`), which caused race conditions when tests ran in parallel. The WAL uses append-only files with rotation, so concurrent writes from multiple tests would corrupt the log. By giving each test its own storage path (via an `AtomicU64` counter), tests can run in parallel without interfering with each other. The `with_storage_path` constructor also makes the engine usable in non-test scenarios where the caller wants to control where data is stored.
+
+---
+
 ## Why Engine.iter() instead of scanning each SSTable separately?
 
 **Decision:** Provide a single `UnifiedStorageIterator` that merges all sources (memtable + all SSTables) into one ordered iteration.

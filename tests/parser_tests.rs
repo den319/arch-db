@@ -1,6 +1,6 @@
-use arch_db::sql::{ast::{Assignment, BinaryOperator, DataType, Expr, SelectItem, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser};
-
-
+use arch_db::sql::{
+    ast::{Assignment, BinaryOperator, DataType, Expr, OrderDirection, SelectItem, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser,
+};
 
 #[test]
 fn parser_dispatches_select() {
@@ -16,9 +16,7 @@ fn parser_dispatches_select() {
 #[test]
 #[should_panic]
 fn parser_dispatches_insert() {
-    let lexer = Lexer::new(
-        "INSERT INTO users VALUES ('john')"
-    );
+    let lexer = Lexer::new("INSERT INTO users VALUES ('john')");
 
     let mut parser = Parser::new(lexer);
 
@@ -28,9 +26,7 @@ fn parser_dispatches_insert() {
 #[test]
 #[should_panic]
 fn parser_dispatches_create() {
-    let lexer = Lexer::new(
-        "CREATE TABLE users"
-    );
+    let lexer = Lexer::new("CREATE TABLE users");
 
     let mut parser = Parser::new(lexer);
 
@@ -39,9 +35,7 @@ fn parser_dispatches_create() {
 
 #[test]
 fn test_parse_create_table_single_column() {
-    let lexer = Lexer::new(
-        "CREATE TABLE users (id INT);"
-    );
+    let lexer = Lexer::new("CREATE TABLE users (id INT);");
 
     let mut parser = Parser::new(lexer);
 
@@ -54,10 +48,7 @@ fn test_parse_create_table_single_column() {
             assert_eq!(table.columns.len(), 1);
 
             assert_eq!(table.columns[0].name, "id");
-            assert_eq!(
-                table.columns[0].data_type,
-                DataType::Int
-            );
+            assert_eq!(table.columns[0].data_type, DataType::Int);
         }
 
         _ => panic!("Expected CREATE TABLE"),
@@ -71,7 +62,7 @@ fn test_parse_create_table_multiple_columns() {
             id INT,
             name TEXT,
             age INT
-        );"
+        );",
     );
 
     let mut parser = Parser::new(lexer);
@@ -80,7 +71,6 @@ fn test_parse_create_table_multiple_columns() {
 
     match stmt {
         Statement::CreateTable(table) => {
-
             assert_eq!(table.table_name, "users");
 
             assert_eq!(table.columns.len(), 3);
@@ -105,7 +95,7 @@ fn test_parse_create_table_lowercase_keywords() {
         "create table users (
             id int,
             name text
-        );"
+        );",
     );
 
     let mut parser = Parser::new(lexer);
@@ -114,7 +104,6 @@ fn test_parse_create_table_lowercase_keywords() {
 
     match stmt {
         Statement::CreateTable(table) => {
-
             assert_eq!(table.table_name, "users");
 
             assert_eq!(table.columns.len(), 2);
@@ -129,9 +118,7 @@ fn test_parse_create_table_lowercase_keywords() {
 
 #[test]
 fn test_parse_create_table_without_semicolon() {
-    let lexer = Lexer::new(
-        "CREATE TABLE users (id INT)"
-    );
+    let lexer = Lexer::new("CREATE TABLE users (id INT)");
 
     let mut parser = Parser::new(lexer);
 
@@ -150,9 +137,7 @@ fn test_parse_create_table_without_semicolon() {
 #[test]
 #[should_panic]
 fn test_parse_create_table_empty_columns() {
-    let lexer = Lexer::new(
-        "CREATE TABLE users ();"
-    );
+    let lexer = Lexer::new("CREATE TABLE users ();");
 
     let mut parser = Parser::new(lexer);
 
@@ -165,7 +150,7 @@ fn test_parse_create_table_missing_type() {
     let lexer = Lexer::new(
         "CREATE TABLE users (
             id
-        );"
+        );",
     );
 
     let mut parser = Parser::new(lexer);
@@ -178,7 +163,7 @@ fn test_parse_create_table_missing_type() {
 fn test_parse_create_table_missing_right_paren() {
     let lexer = Lexer::new(
         "CREATE TABLE users (
-            id INT"
+            id INT",
     );
 
     let mut parser = Parser::new(lexer);
@@ -188,9 +173,7 @@ fn test_parse_create_table_missing_right_paren() {
 
 #[test]
 fn test_parse_insert_single_column() {
-    let lexer = Lexer::new(
-        "INSERT INTO users (id) VALUES (1);"
-    );
+    let lexer = Lexer::new("INSERT INTO users (id) VALUES (1);");
 
     let mut parser = Parser::new(lexer);
 
@@ -200,15 +183,9 @@ fn test_parse_insert_single_column() {
         Statement::Insert(insert) => {
             assert_eq!(insert.table_name, "users");
 
-            assert_eq!(
-                insert.columns,
-                vec!["id"]
-            );
+            assert_eq!(insert.columns, vec!["id"]);
 
-            assert_eq!(
-                insert.values,
-                vec![Expr::Number(1)]
-            );
+            assert_eq!(insert.values, vec![Expr::Number(1)]);
         }
 
         _ => panic!("Expected INSERT"),
@@ -219,7 +196,7 @@ fn test_parse_insert_single_column() {
 fn test_parse_insert_multiple_columns() {
     let lexer = Lexer::new(
         "INSERT INTO users (id, name, age)
-         VALUES (1, 'John', 25);"
+         VALUES (1, 'John', 25);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -228,13 +205,9 @@ fn test_parse_insert_multiple_columns() {
 
     match stmt {
         Statement::Insert(insert) => {
-
             assert_eq!(insert.table_name, "users");
 
-            assert_eq!(
-                insert.columns,
-                vec!["id", "name", "age"]
-            );
+            assert_eq!(insert.columns, vec!["id", "name", "age"]);
 
             assert_eq!(
                 insert.values,
@@ -254,7 +227,7 @@ fn test_parse_insert_multiple_columns() {
 fn test_parse_insert_strings() {
     let lexer = Lexer::new(
         "INSERT INTO users (first, last)
-         VALUES ('John', 'Doe');"
+         VALUES ('John', 'Doe');",
     );
 
     let mut parser = Parser::new(lexer);
@@ -263,13 +236,9 @@ fn test_parse_insert_strings() {
 
     match stmt {
         Statement::Insert(insert) => {
-
             assert_eq!(
                 insert.values,
-                vec![
-                    Expr::String("John".into()),
-                    Expr::String("Doe".into()),
-                ]
+                vec![Expr::String("John".into()), Expr::String("Doe".into()),]
             );
         }
 
@@ -281,7 +250,7 @@ fn test_parse_insert_strings() {
 fn test_parse_insert_without_semicolon() {
     let lexer = Lexer::new(
         "INSERT INTO users (id)
-         VALUES (5)"
+         VALUES (5)",
     );
 
     let mut parser = Parser::new(lexer);
@@ -295,7 +264,7 @@ fn test_parse_insert_without_semicolon() {
 fn test_parse_insert_lowercase_keywords() {
     let lexer = Lexer::new(
         "insert into users (id)
-         values (1);"
+         values (1);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -310,7 +279,7 @@ fn test_parse_insert_lowercase_keywords() {
 fn test_parse_insert_missing_values_keyword() {
     let lexer = Lexer::new(
         "INSERT INTO users (id)
-         (1);"
+         (1);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -323,7 +292,7 @@ fn test_parse_insert_missing_values_keyword() {
 fn test_parse_insert_missing_right_paren() {
     let lexer = Lexer::new(
         "INSERT INTO users (id
-         VALUES (1);"
+         VALUES (1);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -336,7 +305,7 @@ fn test_parse_insert_missing_right_paren() {
 fn test_parse_insert_missing_left_paren_after_values() {
     let lexer = Lexer::new(
         "INSERT INTO users (id)
-         VALUES 1);"
+         VALUES 1);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -349,7 +318,7 @@ fn test_parse_insert_missing_left_paren_after_values() {
 fn test_parse_insert_missing_comma_between_columns() {
     let lexer = Lexer::new(
         "INSERT INTO users (id name)
-         VALUES (1, 'John');"
+         VALUES (1, 'John');",
     );
 
     let mut parser = Parser::new(lexer);
@@ -362,7 +331,7 @@ fn test_parse_insert_missing_comma_between_columns() {
 fn test_parse_insert_missing_comma_between_values() {
     let lexer = Lexer::new(
         "INSERT INTO users (id, name)
-         VALUES (1 'John');"
+         VALUES (1 'John');",
     );
 
     let mut parser = Parser::new(lexer);
@@ -375,7 +344,7 @@ fn test_parse_insert_missing_comma_between_values() {
 fn test_parse_insert_column_value_count_mismatch() {
     let lexer = Lexer::new(
         "INSERT INTO users (id, name)
-         VALUES (1);"
+         VALUES (1);",
     );
 
     let mut parser = Parser::new(lexer);
@@ -469,9 +438,7 @@ fn test_parse_expression_missing_lhs() {
 
 #[test]
 fn test_parse_select_wildcard() {
-    let lexer = Lexer::new(
-        "SELECT * FROM users;"
-    );
+    let lexer = Lexer::new("SELECT * FROM users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -479,10 +446,7 @@ fn test_parse_select_wildcard() {
 
     match stmt {
         Statement::Select(select) => {
-            assert_eq!(
-                select.columns,
-                vec![SelectItem::Wildcard]
-            );
+            assert_eq!(select.columns, vec![SelectItem::Wildcard]);
 
             assert_eq!(select.table_name, "users");
 
@@ -495,9 +459,7 @@ fn test_parse_select_wildcard() {
 
 #[test]
 fn test_parse_select_columns() {
-    let lexer = Lexer::new(
-        "SELECT id, name, age FROM users;"
-    );
+    let lexer = Lexer::new("SELECT id, name, age FROM users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -505,7 +467,6 @@ fn test_parse_select_columns() {
 
     match stmt {
         Statement::Select(select) => {
-
             assert_eq!(
                 select.columns,
                 vec![
@@ -526,9 +487,7 @@ fn test_parse_select_columns() {
 
 #[test]
 fn test_parse_select_where() {
-    let lexer = Lexer::new(
-        "SELECT * FROM users WHERE id = 1;"
-    );
+    let lexer = Lexer::new("SELECT * FROM users WHERE id = 1;");
 
     let mut parser = Parser::new(lexer);
 
@@ -536,27 +495,17 @@ fn test_parse_select_where() {
 
     match stmt {
         Statement::Select(select) => {
-
-            assert_eq!(
-                select.columns,
-                vec![SelectItem::Wildcard]
-            );
+            assert_eq!(select.columns, vec![SelectItem::Wildcard]);
 
             assert_eq!(select.table_name, "users");
 
             assert_eq!(
                 select.where_clause,
-                Some(
-                    Expr::Binary {
-                        left: Box::new(
-                            Expr::Identifier("id".into())
-                        ),
-                        op: BinaryOperator::Equal,
-                        right: Box::new(
-                            Expr::Number(1)
-                        ),
-                    }
-                )
+                Some(Expr::Binary {
+                    left: Box::new(Expr::Identifier("id".into())),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expr::Number(1)),
+                })
             );
         }
 
@@ -566,9 +515,7 @@ fn test_parse_select_where() {
 
 #[test]
 fn test_parse_select_where_string() {
-    let lexer = Lexer::new(
-        "SELECT name FROM users WHERE name = 'John';"
-    );
+    let lexer = Lexer::new("SELECT name FROM users WHERE name = 'John';");
 
     let mut parser = Parser::new(lexer);
 
@@ -576,20 +523,13 @@ fn test_parse_select_where_string() {
 
     match stmt {
         Statement::Select(select) => {
-
             assert_eq!(
                 select.where_clause,
-                Some(
-                    Expr::Binary {
-                        left: Box::new(
-                            Expr::Identifier("name".into())
-                        ),
-                        op: BinaryOperator::Equal,
-                        right: Box::new(
-                            Expr::String("John".into())
-                        ),
-                    }
-                )
+                Some(Expr::Binary {
+                    left: Box::new(Expr::Identifier("name".into())),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expr::String("John".into())),
+                })
             );
         }
 
@@ -599,9 +539,7 @@ fn test_parse_select_where_string() {
 
 #[test]
 fn test_parse_select_lowercase() {
-    let lexer = Lexer::new(
-        "select * from users;"
-    );
+    let lexer = Lexer::new("select * from users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -612,9 +550,7 @@ fn test_parse_select_lowercase() {
 
 #[test]
 fn test_parse_select_without_semicolon() {
-    let lexer = Lexer::new(
-        "SELECT * FROM users"
-    );
+    let lexer = Lexer::new("SELECT * FROM users");
 
     let mut parser = Parser::new(lexer);
 
@@ -626,9 +562,7 @@ fn test_parse_select_without_semicolon() {
 #[test]
 #[should_panic]
 fn test_parse_select_missing_from() {
-    let lexer = Lexer::new(
-        "SELECT * users;"
-    );
+    let lexer = Lexer::new("SELECT * users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -638,9 +572,7 @@ fn test_parse_select_missing_from() {
 #[test]
 #[should_panic]
 fn test_parse_select_missing_table() {
-    let lexer = Lexer::new(
-        "SELECT * FROM;"
-    );
+    let lexer = Lexer::new("SELECT * FROM;");
 
     let mut parser = Parser::new(lexer);
 
@@ -650,9 +582,7 @@ fn test_parse_select_missing_table() {
 #[test]
 #[should_panic]
 fn test_parse_select_missing_columns() {
-    let lexer = Lexer::new(
-        "SELECT FROM users;"
-    );
+    let lexer = Lexer::new("SELECT FROM users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -662,9 +592,7 @@ fn test_parse_select_missing_columns() {
 #[test]
 #[should_panic]
 fn test_parse_select_missing_where_expression() {
-    let lexer = Lexer::new(
-        "SELECT * FROM users WHERE;"
-    );
+    let lexer = Lexer::new("SELECT * FROM users WHERE;");
 
     let mut parser = Parser::new(lexer);
 
@@ -674,9 +602,7 @@ fn test_parse_select_missing_where_expression() {
 #[test]
 #[should_panic]
 fn test_parse_select_trailing_comma() {
-    let lexer = Lexer::new(
-        "SELECT id, FROM users;"
-    );
+    let lexer = Lexer::new("SELECT id, FROM users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -686,21 +612,16 @@ fn test_parse_select_trailing_comma() {
 #[test]
 #[should_panic]
 fn test_parse_select_multiple_wildcards() {
-    let lexer = Lexer::new(
-        "SELECT *, * FROM users;"
-    );
+    let lexer = Lexer::new("SELECT *, * FROM users;");
 
     let mut parser = Parser::new(lexer);
 
     parser.parse_statement();
 }
 
-
 #[test]
 fn test_parse_delete() {
-    let lexer = Lexer::new(
-        "DELETE FROM users;"
-    );
+    let lexer = Lexer::new("DELETE FROM users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -718,9 +639,7 @@ fn test_parse_delete() {
 
 #[test]
 fn test_parse_delete_where_string() {
-    let lexer = Lexer::new(
-        "DELETE FROM users WHERE name = 'John';"
-    );
+    let lexer = Lexer::new("DELETE FROM users WHERE name = 'John';");
 
     let mut parser = Parser::new(lexer);
 
@@ -728,20 +647,13 @@ fn test_parse_delete_where_string() {
 
     match stmt {
         Statement::Delete(delete) => {
-
             assert_eq!(
                 delete.where_clause,
-                Some(
-                    Expr::Binary {
-                        left: Box::new(
-                            Expr::Identifier("name".into())
-                        ),
-                        op: BinaryOperator::Equal,
-                        right: Box::new(
-                            Expr::String("John".into())
-                        ),
-                    }
-                )
+                Some(Expr::Binary {
+                    left: Box::new(Expr::Identifier("name".into())),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expr::String("John".into())),
+                })
             );
         }
 
@@ -751,9 +663,7 @@ fn test_parse_delete_where_string() {
 
 #[test]
 fn test_parse_delete_where() {
-    let lexer = Lexer::new(
-        "DELETE FROM users WHERE id = 1;"
-    );
+    let lexer = Lexer::new("DELETE FROM users WHERE id = 1;");
 
     let mut parser = Parser::new(lexer);
 
@@ -761,22 +671,15 @@ fn test_parse_delete_where() {
 
     match stmt {
         Statement::Delete(delete) => {
-
             assert_eq!(delete.table_name, "users");
 
             assert_eq!(
                 delete.where_clause,
-                Some(
-                    Expr::Binary {
-                        left: Box::new(
-                            Expr::Identifier("id".into())
-                        ),
-                        op: BinaryOperator::Equal,
-                        right: Box::new(
-                            Expr::Number(1)
-                        ),
-                    }
-                )
+                Some(Expr::Binary {
+                    left: Box::new(Expr::Identifier("id".into())),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expr::Number(1)),
+                })
             );
         }
 
@@ -786,39 +689,26 @@ fn test_parse_delete_where() {
 
 #[test]
 fn test_parse_delete_without_semicolon() {
-    let lexer = Lexer::new(
-        "DELETE FROM users"
-    );
+    let lexer = Lexer::new("DELETE FROM users");
 
     let mut parser = Parser::new(lexer);
 
-    assert!(matches!(
-        parser.parse_statement(),
-        Statement::Delete(_)
-    ));
+    assert!(matches!(parser.parse_statement(), Statement::Delete(_)));
 }
-
 
 #[test]
 fn test_parse_delete_lowercase() {
-    let lexer = Lexer::new(
-        "delete from users;"
-    );
+    let lexer = Lexer::new("delete from users;");
 
     let mut parser = Parser::new(lexer);
 
-    assert!(matches!(
-        parser.parse_statement(),
-        Statement::Delete(_)
-    ));
+    assert!(matches!(parser.parse_statement(), Statement::Delete(_)));
 }
 
 #[test]
 #[should_panic]
 fn test_parse_delete_missing_from() {
-    let lexer = Lexer::new(
-        "DELETE users;"
-    );
+    let lexer = Lexer::new("DELETE users;");
 
     let mut parser = Parser::new(lexer);
 
@@ -828,9 +718,7 @@ fn test_parse_delete_missing_from() {
 #[test]
 #[should_panic]
 fn test_parse_delete_missing_table() {
-    let lexer = Lexer::new(
-        "DELETE FROM;"
-    );
+    let lexer = Lexer::new("DELETE FROM;");
 
     let mut parser = Parser::new(lexer);
 
@@ -840,9 +728,7 @@ fn test_parse_delete_missing_table() {
 #[test]
 #[should_panic]
 fn test_parse_delete_missing_where_expression() {
-    let lexer = Lexer::new(
-        "DELETE FROM users WHERE;"
-    );
+    let lexer = Lexer::new("DELETE FROM users WHERE;");
 
     let mut parser = Parser::new(lexer);
 
@@ -851,9 +737,7 @@ fn test_parse_delete_missing_where_expression() {
 
 #[test]
 fn test_parse_update() {
-    let lexer = Lexer::new(
-        "UPDATE users SET name = 'John';"
-    );
+    let lexer = Lexer::new("UPDATE users SET name = 'John';");
 
     let mut parser = Parser::new(lexer);
 
@@ -861,17 +745,14 @@ fn test_parse_update() {
 
     match stmt {
         Statement::Update(update) => {
-
             assert_eq!(update.table_name, "users");
 
             assert_eq!(
                 update.assignments,
-                vec![
-                    Assignment {
-                        column: "name".into(),
-                        value: Expr::String("John".into()),
-                    }
-                ]
+                vec![Assignment {
+                    column: "name".into(),
+                    value: Expr::String("John".into()),
+                }]
             );
 
             assert_eq!(update.where_clause, None);
@@ -883,9 +764,7 @@ fn test_parse_update() {
 
 #[test]
 fn test_parse_update_multiple_assignments() {
-    let lexer = Lexer::new(
-        "UPDATE users SET name = 'John', age = 25;"
-    );
+    let lexer = Lexer::new("UPDATE users SET name = 'John', age = 25;");
 
     let mut parser = Parser::new(lexer);
 
@@ -893,7 +772,6 @@ fn test_parse_update_multiple_assignments() {
 
     match stmt {
         Statement::Update(update) => {
-
             assert_eq!(
                 update.assignments,
                 vec![
@@ -913,12 +791,9 @@ fn test_parse_update_multiple_assignments() {
     }
 }
 
-
 #[test]
 fn test_parse_update_where() {
-    let lexer = Lexer::new(
-        "UPDATE users SET name = 'John' WHERE id = 1;"
-    );
+    let lexer = Lexer::new("UPDATE users SET name = 'John' WHERE id = 1;");
 
     let mut parser = Parser::new(lexer);
 
@@ -926,22 +801,15 @@ fn test_parse_update_where() {
 
     match stmt {
         Statement::Update(update) => {
-
             assert_eq!(update.table_name, "users");
 
             assert_eq!(
                 update.where_clause,
-                Some(
-                    Expr::Binary {
-                        left: Box::new(
-                            Expr::Identifier("id".into())
-                        ),
-                        op: BinaryOperator::Equal,
-                        right: Box::new(
-                            Expr::Number(1)
-                        ),
-                    }
-                )
+                Some(Expr::Binary {
+                    left: Box::new(Expr::Identifier("id".into())),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expr::Number(1)),
+                })
             );
         }
 
@@ -951,38 +819,26 @@ fn test_parse_update_where() {
 
 #[test]
 fn test_parse_update_without_semicolon() {
-    let lexer = Lexer::new(
-        "UPDATE users SET age = 30"
-    );
+    let lexer = Lexer::new("UPDATE users SET age = 30");
 
     let mut parser = Parser::new(lexer);
 
-    assert!(matches!(
-        parser.parse_statement(),
-        Statement::Update(_)
-    ));
+    assert!(matches!(parser.parse_statement(), Statement::Update(_)));
 }
 
 #[test]
 fn test_parse_update_lowercase() {
-    let lexer = Lexer::new(
-        "update users set age = 30;"
-    );
+    let lexer = Lexer::new("update users set age = 30;");
 
     let mut parser = Parser::new(lexer);
 
-    assert!(matches!(
-        parser.parse_statement(),
-        Statement::Update(_)
-    ));
+    assert!(matches!(parser.parse_statement(), Statement::Update(_)));
 }
 
 #[test]
 #[should_panic]
 fn test_parse_update_missing_set() {
-    let lexer = Lexer::new(
-        "UPDATE users age = 30;"
-    );
+    let lexer = Lexer::new("UPDATE users age = 30;");
 
     let mut parser = Parser::new(lexer);
 
@@ -992,9 +848,7 @@ fn test_parse_update_missing_set() {
 #[test]
 #[should_panic]
 fn test_parse_update_missing_value() {
-    let lexer = Lexer::new(
-        "UPDATE users SET age = ;"
-    );
+    let lexer = Lexer::new("UPDATE users SET age = ;");
 
     let mut parser = Parser::new(lexer);
 
@@ -1004,9 +858,7 @@ fn test_parse_update_missing_value() {
 #[test]
 #[should_panic]
 fn test_parse_update_missing_where_expression() {
-    let lexer = Lexer::new(
-        "UPDATE users SET age = 30 WHERE;"
-    );
+    let lexer = Lexer::new("UPDATE users SET age = 30 WHERE;");
 
     let mut parser = Parser::new(lexer);
 
@@ -1016,9 +868,7 @@ fn test_parse_update_missing_where_expression() {
 #[test]
 #[should_panic]
 fn test_parse_update_trailing_comma() {
-    let lexer = Lexer::new(
-        "UPDATE users SET age = 30, WHERE id = 1;"
-    );
+    let lexer = Lexer::new("UPDATE users SET age = 30, WHERE id = 1;");
 
     let mut parser = Parser::new(lexer);
 
@@ -1027,9 +877,7 @@ fn test_parse_update_trailing_comma() {
 
 #[test]
 fn test_parse_update_three_assignments() {
-    let lexer = Lexer::new(
-        "UPDATE users SET name = 'John', age = 30, city = 'London';"
-    );
+    let lexer = Lexer::new("UPDATE users SET name = 'John', age = 30, city = 'London';");
 
     let mut parser = Parser::new(lexer);
 
@@ -1039,20 +887,11 @@ fn test_parse_update_three_assignments() {
         Statement::Update(update) => {
             assert_eq!(update.assignments.len(), 3);
 
-            assert_eq!(
-                update.assignments[0].column,
-                "name"
-            );
+            assert_eq!(update.assignments[0].column, "name");
 
-            assert_eq!(
-                update.assignments[1].column,
-                "age"
-            );
+            assert_eq!(update.assignments[1].column, "age");
 
-            assert_eq!(
-                update.assignments[2].column,
-                "city"
-            );
+            assert_eq!(update.assignments[2].column, "city");
         }
 
         _ => panic!("Expected UPDATE"),
@@ -1062,9 +901,7 @@ fn test_parse_update_three_assignments() {
 #[test]
 #[should_panic]
 fn test_parse_update_missing_comma() {
-    let lexer = Lexer::new(
-        "UPDATE users SET age = 30 name = 'John';"
-    );
+    let lexer = Lexer::new("UPDATE users SET age = 30 name = 'John';");
 
     let mut parser = Parser::new(lexer);
 
@@ -1074,11 +911,111 @@ fn test_parse_update_missing_comma() {
 #[test]
 #[should_panic]
 fn test_parse_update_missing_table_name() {
-    let lexer = Lexer::new(
-        "UPDATE SET age = 30;"
-    );
+    let lexer = Lexer::new("UPDATE SET age = 30;");
 
     let mut parser = Parser::new(lexer);
 
     parser.parse_statement();
 }
+
+#[test]
+fn test_parse_select_order_by() {
+    let lexer = Lexer::new(
+        "SELECT * FROM users ORDER BY id;"
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    match statement {
+        Statement::Select(select) => {
+            let order = select
+                .order_by
+                .expect("Expected ORDER BY");
+
+            assert_eq!(order.column, "id");
+            assert_eq!(order.direction, OrderDirection::Asc);
+
+            assert!(select.limit.is_none());
+        }
+
+        _ => panic!("Expected SELECT statement"),
+    }
+}
+
+#[test]
+fn test_parse_select_order_by_desc() {
+    let lexer = Lexer::new(
+        "SELECT * FROM users ORDER BY id DESC;"
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    match statement {
+        Statement::Select(select) => {
+            let order = select
+                .order_by
+                .expect("Expected ORDER BY");
+
+            assert_eq!(order.column, "id");
+            assert_eq!(order.direction, OrderDirection::Desc);
+
+            assert!(select.limit.is_none());
+        }
+
+        _ => panic!("Expected SELECT statement"),
+    }
+}
+
+#[test]
+fn test_parse_select_limit() {
+    let lexer = Lexer::new(
+        "SELECT * FROM users LIMIT 5;"
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    match statement {
+        Statement::Select(select) => {
+
+            assert!(select.order_by.is_none());
+
+            assert_eq!(select.limit, Some(5));
+        }
+
+        _ => panic!("Expected SELECT statement"),
+    }
+}
+
+#[test]
+fn test_parse_select_order_by_limit() {
+    let lexer = Lexer::new(
+        "SELECT * FROM users ORDER BY id DESC LIMIT 10;"
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    match statement {
+        Statement::Select(select) => {
+
+            let order = select
+                .order_by
+                .expect("Expected ORDER BY");
+
+            assert_eq!(order.column, "id");
+            assert_eq!(order.direction, OrderDirection::Desc);
+
+            assert_eq!(select.limit, Some(10));
+        }
+
+        _ => panic!("Expected SELECT statement"),
+    }
+}
+

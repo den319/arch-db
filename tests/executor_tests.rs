@@ -1,35 +1,17 @@
 use std::path::Path;
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arch_db::{engine::{Engine, Value}, sql::{ast::{self, Assignment, BinaryOperator, ColumnDef, CreateTable, DataType, Delete, Expr, Insert, Select, SelectItem, Statement, Update}, catalog::{self as catalog_mod, Catalog, CatalogDataType, Column, TableSchema}, executor::{Executor, QueryResult}, row::{Row, RowValue}}};
 
-fn clean_all_state() {
-    let path = Path::new("storage/temp");
-    if path.exists() {
-        for entry in fs::read_dir(path).into_iter().flatten() {
-            if let Ok(entry) = entry {
-                fs::remove_file(entry.path()).ok();
-            }
-        }
-    }
-    for entry in fs::read_dir(".").into_iter().flatten() {
-        if let Ok(entry) = entry {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("sst_") && name.ends_with(".bin") {
-                fs::remove_file(entry.path()).ok();
-            }
-        }
-    }
-    fs::remove_file("MANIFEST.log").ok();
-    fs::remove_file("MANIFEST.checkpoint").ok();
-}
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn make_engine() -> Engine {
-    clean_all_state();
-    Engine::new()
+    let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = format!("storage/test_executor_{}", id);
+    let _ = fs::remove_dir_all(&path);
+    Engine::with_storage_path(&path)
 }
-
 
 
 #[test]
@@ -258,6 +240,8 @@ fn test_select_by_integer_primary_key() {
     let result = executor.execute(Statement::Select(Select {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Binary {
                 left: Box::new(Expr::Identifier("id".into())),
@@ -314,6 +298,8 @@ fn test_select_by_text_primary_key() {
     let result = executor.execute(Statement::Select(Select {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Binary {
                 left: Box::new(
@@ -348,6 +334,23 @@ fn test_select_missing_table() {
     let result = executor.execute(Statement::Select(Select {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(
+                    Expr::Identifier("id".into())
+                ),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            }
+        ),
+    }));
+    let result = executor.execute(Statement::Select(Select {
+        columns: vec![SelectItem::Wildcard],
+        table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Binary {
                 left: Box::new(
@@ -387,6 +390,8 @@ fn test_select_missing_row() {
     let result = executor.execute(Statement::Select(Select {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Binary {
                 left: Box::new(
@@ -425,6 +430,8 @@ fn test_select_without_where_clause() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -453,6 +460,8 @@ fn test_select_with_invalid_where_clause() {
     let result = executor.execute(Statement::Select(Select {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Identifier("id".into())
         ),
@@ -495,7 +504,8 @@ fn test_delete_existing_row() {
 
     let result = executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -521,7 +531,8 @@ fn test_delete_from_missing_table() {
 
     let result = executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -591,7 +602,8 @@ fn test_delete_requires_primary_key() {
 
     let result = executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("name".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::String("Alice".into())),
@@ -628,7 +640,8 @@ fn test_delete_non_existing_row() {
 
     let result = executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(99)),
@@ -696,7 +709,7 @@ fn test_update_existing_row() {
                 }
             ],
             where_clause: Some(
-                Expr::Binary {
+            Expr::Binary {
                     left: Box::new(
                         Expr::Identifier("id".into())
                     ),
@@ -778,7 +791,7 @@ fn test_update_non_existing_row() {
                 }
             ],
             where_clause: Some(
-                Expr::Binary {
+            Expr::Binary {
                     left: Box::new(
                         Expr::Identifier("id".into())
                     ),
@@ -859,7 +872,7 @@ fn test_update_multiple_columns() {
                 },
             ],
             where_clause: Some(
-                Expr::Binary {
+            Expr::Binary {
                     left: Box::new(
                         Expr::Identifier("id".into())
                     ),
@@ -953,7 +966,7 @@ fn test_update_does_not_change_primary_key() {
                 }
             ],
             where_clause: Some(
-                Expr::Binary {
+            Expr::Binary {
                     left: Box::new(
                         Expr::Identifier("id".into())
                     ),
@@ -1002,6 +1015,8 @@ fn test_select_all_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1031,6 +1046,8 @@ fn test_select_all_empty_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1063,6 +1080,8 @@ fn test_select_all_single_row() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1107,6 +1126,8 @@ fn test_select_all_multiple_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1146,7 +1167,8 @@ fn test_select_all_skips_deleted_rows() {
 
     executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -1157,6 +1179,8 @@ fn test_select_all_skips_deleted_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1193,7 +1217,8 @@ fn test_select_all_after_update() {
             column: "name".into(),
             value: Expr::String("Alice Smith".into()),
         }],
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -1204,6 +1229,8 @@ fn test_select_all_after_update() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1240,7 +1267,8 @@ fn test_select_all_after_multiple_updates() {
             column: "name".into(),
             value: Expr::String("Bob".into()),
         }],
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -1253,7 +1281,8 @@ fn test_select_all_after_multiple_updates() {
             column: "name".into(),
             value: Expr::String("Charlie".into()),
         }],
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -1264,6 +1293,8 @@ fn test_select_all_after_multiple_updates() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1301,6 +1332,8 @@ fn test_select_all_after_flush() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -1355,6 +1388,8 @@ fn test_select_all_only_requested_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     assert_eq!(
@@ -1414,6 +1449,8 @@ fn test_select_all_from_memtable_and_sstable() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -1461,6 +1498,8 @@ fn test_select_specific_column_by_primary_key() {
             SelectItem::Column("name".into()),
         ],
         table_name: "users".into(),
+        limit: None,
+        order_by: None,
         where_clause: Some(
             Expr::Binary {
                 left: Box::new(
@@ -1534,6 +1573,8 @@ fn test_select_all_rows_without_where() {
             table_name: "users".into(),
 
             where_clause: None,
+            limit: None,
+            order_by: None,
         }));
 
     match result {
@@ -1619,11 +1660,13 @@ fn test_select_with_non_primary_key_where() {
             columns: vec![
                 SelectItem::Wildcard,
             ],
+            limit: None,
+            order_by: None,
 
             table_name: "users".into(),
 
             where_clause: Some(
-                Expr::Binary {
+            Expr::Binary {
 
                     left: Box::new(
                         Expr::Identifier("name".into())
@@ -1708,6 +1751,8 @@ fn test_select_after_flush() {
             table_name: "users".into(),
 
             where_clause: None,
+            limit: None,
+            order_by: None,
         }));
 
     match result {
@@ -1752,7 +1797,8 @@ fn test_delete_by_primary_key() {
 
     executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::Number(1)),
@@ -1763,6 +1809,8 @@ fn test_delete_by_primary_key() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -1842,6 +1890,8 @@ fn test_delete_with_non_primary_key_where() {
         ],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -1912,14 +1962,16 @@ fn test_delete_multiple_rows() {
         ],
         table_name: "users".into(),
         where_clause: None,
+        limit: None,
+        order_by: None,
     }));
 
     match result {
         QueryResult::Rows(rows) => {
             assert_eq!(rows.len(), 2);
 
-            assert_eq!(rows[0], vec!["1", "10"]);
-            assert_eq!(rows[1], vec!["2", "20"]);
+            assert_eq!(rows[0], vec!["10", "1"]);
+            assert_eq!(rows[1], vec!["20", "2"]);
         }
 
         _ => panic!("Expected rows"),
@@ -1974,6 +2026,8 @@ fn test_delete_no_matching_rows() {
         ],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -2019,7 +2073,8 @@ fn test_delete_after_flush() {
 
     executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("name".into())),
             op: BinaryOperator::Equal,
             right: Box::new(Expr::String("User25".into())),
@@ -2030,6 +2085,8 @@ fn test_delete_after_flush() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -2089,7 +2146,8 @@ fn test_delete_from_memtable_and_sstable() {
 
     executor.execute(Statement::Delete(Delete {
         table_name: "users".into(),
-        where_clause: Some(Expr::Binary {
+        where_clause: Some(
+            Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::GreaterThan,
             right: Box::new(Expr::Number(35)),
@@ -2100,6 +2158,8 @@ fn test_delete_from_memtable_and_sstable() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+            limit: None,
+            order_by: None,
     }));
 
     match result {
@@ -2153,7 +2213,8 @@ fn test_delete_comparison_operators() {
 
         executor.execute(Statement::Delete(Delete {
             table_name: "users".into(),
-            where_clause: Some(Expr::Binary {
+            where_clause: Some(
+            Expr::Binary {
                 left: Box::new(Expr::Identifier("id".into())),
                 op,
                 right: Box::new(Expr::Number(value)),
@@ -2164,6 +2225,8 @@ fn test_delete_comparison_operators() {
             columns: vec![SelectItem::Wildcard],
             table_name: "users".into(),
             where_clause: None,
+            limit: None,
+            order_by: None,
         }));
 
         match result {
@@ -2182,4 +2245,3 @@ fn test_delete_comparison_operators() {
         }
     }
 }
-

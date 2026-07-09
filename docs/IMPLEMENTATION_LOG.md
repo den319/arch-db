@@ -150,6 +150,18 @@
 - Fixed SELECT column ordering: `SELECT *` now returns columns in CREATE TABLE order instead of BTreeMap alphabetical order
 - Fixed project_row() to accept schema column list for correct wildcard projection
 
+### 2026-07-09 — Test Infrastructure & Compilation Fixes
+- Added `Engine::with_storage_path(path)` constructor for custom storage directories
+- Refactored `Engine::new()` to delegate to `with_storage_path("storage/temp")`
+- Made all tests use unique per-test WAL paths via `make_engine()` helper with `AtomicU64` counter:
+  - `executor_tests.rs` — eliminated WAL path collisions between parallel tests
+  - `engine_tests.rs` — replaced shared `clean_all_state()` with unique paths
+  - `engine_iterator_tests.rs` — same pattern applied
+- Fixed compilation errors in `executor_tests.rs`:
+  - Moved `limit`/`order_by` fields to correct top-level position in `Select` struct initializers
+  - Removed invalid `limit`/`order_by` fields from `Delete` and `Update` struct initializers
+- Fixed `test_delete_multiple_rows` column ordering assertion (alphabetical from BTreeMap)
+
 ## Known Issues & Technical Debt
 - `MergeIterator` is no longer used directly (replaced by `UnifiedStorageIterator`) — should be removed
 - `engine_iterator.rs` wraps `UnifiedStorageIterator` with minimal logic — could be inlined

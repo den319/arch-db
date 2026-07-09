@@ -471,6 +471,15 @@ impl<'a> Executor<'a> {
             });
         }
 
+        //----------------------------------------------------------
+        // LIMIT
+        //----------------------------------------------------------
+
+        if let Some(limit) = stmt.limit {
+
+            filtered_rows.truncate(limit);
+        }
+
         let mut result = Vec::new();
 
         for row in filtered_rows {

@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, path::Path};
 
 use arch_db::bloom_filter::BloomFilter;
@@ -7,6 +8,15 @@ use arch_db::command::Command;
 use arch_db::engine::{Engine, Value};
 use arch_db::sstable_manager::{init_sstable_counter, SSTable, Level};
 use arch_db::helper::unique_file;
+
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn make_engine() -> Engine {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = format!("storage/test_engine_{}", id);
+    let _ = fs::remove_dir_all(&path);
+    Engine::with_storage_path(&path)
+}
 
 /// Clean up all persistent state from previous test runs.
 fn clean_all_state() {
@@ -46,9 +56,8 @@ pub fn ensure_counter_initialized() {
 #[test]
 fn test_auto_flush_when_memtable_limit_reached() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     engine.memtable_limit = 2;
 
     engine.execute(Command::Set("a".to_string(), "1".to_string()));
@@ -83,9 +92,8 @@ fn test_auto_flush_when_memtable_limit_reached() {
 #[test]
 fn test_auto_flush_preserves_tombstones() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     engine.memtable_limit = 2;
 
     engine.execute(Command::Set("user".to_string(), "john".to_string()));
@@ -109,9 +117,8 @@ fn test_auto_flush_preserves_tombstones() {
 #[test]
 fn test_auto_l0_compaction_trigger() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     for i in 0..12 {
         engine.execute(Command::Set(format!("key{}", i), format!("value{}", i)));
@@ -139,9 +146,8 @@ fn test_auto_l0_compaction_trigger() {
 #[test]
 fn test_shared_sstable_manager_access() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let engine = Engine::new();
+    let engine = make_engine();
 
     {
         let sstables = engine.sstables.lock().unwrap();
@@ -154,9 +160,8 @@ fn test_shared_sstable_manager_access() {
 #[test]
 fn test_flush_with_shared_sstable_manager() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     engine.memtable_limit = 2;
 
     engine.execute(Command::Set("a".to_string(), "1".to_string()));
@@ -185,9 +190,8 @@ fn test_flush_with_shared_sstable_manager() {
 #[test]
 fn test_arc_shares_same_sstable_manager() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let engine = Engine::new();
+    let engine = make_engine();
 
     let shared1 = engine.sstables.clone();
     let shared2 = engine.sstables.clone();
@@ -217,9 +221,8 @@ fn test_arc_shares_same_sstable_manager() {
 #[test]
 fn test_multiple_lock_scopes() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine.execute(Command::Set("name".to_string(), "jhon".to_string()));
 
@@ -241,9 +244,8 @@ fn test_multiple_lock_scopes() {
 #[test]
 fn test_compaction_with_shared_manager() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     for i in 0..12 {
         engine.execute(Command::Set(format!("key{}", i), format!("value{}", i)));
@@ -278,9 +280,8 @@ fn test_compaction_with_shared_manager() {
 // async notification works
 fn test_background_compaction_trigger() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     for i in 0..12 {
         engine.execute(Command::Set(format!("key{}", i), format!("value{}", i)));
@@ -316,9 +317,8 @@ fn test_background_compaction_trigger() {
 // background compaction isolated
 fn test_writes_continue_during_background_compaction() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     for i in 0..20 {
         engine.execute(Command::Set(format!("user{}", i), format!("value{}", i)));
@@ -355,9 +355,8 @@ fn test_writes_continue_during_background_compaction() {
 // no deadlock
 fn test_multiple_background_compaction_signals() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let engine = Engine::new();
+    let engine = make_engine();
 
     for _ in 0..10 {
         let _ = engine.compaction_tx.send(());
@@ -369,9 +368,8 @@ fn test_multiple_background_compaction_signals() {
 #[test]
 fn test_put_stores_value() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine
         .put("name".to_string(), "john".to_string())
@@ -386,9 +384,8 @@ fn test_put_stores_value() {
 #[test]
 fn test_get_missing_key_returns_tombstone() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     match engine.get("missing") {
         Some(Value::Tombstone) => {}
@@ -399,9 +396,8 @@ fn test_get_missing_key_returns_tombstone() {
 #[test]
 fn test_delete_marks_key_as_tombstone() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine
         .put("user".to_string(), "alice".to_string())
@@ -420,9 +416,8 @@ fn test_delete_marks_key_as_tombstone() {
 #[test]
 fn test_delete_nonexistent_key_creates_tombstone() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine
         .delete("ghost".to_string())
@@ -437,9 +432,8 @@ fn test_delete_nonexistent_key_creates_tombstone() {
 #[test]
 fn test_put_overwrites_existing_value() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine
         .put("user".to_string(), "alice".to_string())

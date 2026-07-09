@@ -1,7 +1,16 @@
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arch_db::{command::Command, engine::{Engine, Value}, sstable_manager::init_sstable_counter, storage_iterator::StorageIterator};
 
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn make_engine() -> Engine {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = format!("storage/test_engine_iter_{}", id);
+    let _ = std::fs::remove_dir_all(&path);
+    Engine::with_storage_path(&path)
+}
 
 pub fn ensure_counter_initialized() {
     static INIT: OnceLock<()> = OnceLock::new();
@@ -10,35 +19,11 @@ pub fn ensure_counter_initialized() {
     });
 }
 
-/// Clean up all persistent state from previous test runs.
-/// Tests must NOT run in parallel since they share storage paths.
-fn clean_all_state() {
-    // Remove WAL storage directory entirely
-    let path = std::path::Path::new("storage/temp");
-    if path.exists() {
-        std::fs::remove_dir_all(path).ok();
-    }
-    // Remove stale SSTable files
-    for entry in std::fs::read_dir(".").ok().into_iter().flatten() {
-        if let Ok(entry) = entry {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("sst_") && name.ends_with(".bin") {
-                std::fs::remove_file(entry.path()).ok();
-            }
-        }
-    }
-    // Remove manifest files
-    std::fs::remove_file("MANIFEST.log").ok();
-    std::fs::remove_file("MANIFEST.checkpoint").ok();
-}
-
 #[test]
 fn test_engine_iterator_memtable() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     engine.execute(Command::Set("a".to_string(), "1".to_string()));
     engine.execute(Command::Set("b".to_string(), "2".to_string()));
@@ -65,9 +50,8 @@ fn test_engine_iterator_memtable() {
 #[test]
 fn test_engine_iterator_empty() {
     ensure_counter_initialized();
-    clean_all_state();
 
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
 
     let mut iter = engine.iter().unwrap();
 
