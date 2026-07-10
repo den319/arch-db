@@ -161,6 +161,9 @@ impl Lexer {
             "LIMIT" => Token::Limit,
             "ASC" => Token::Asc,
             "DESC" => Token::Desc,
+            "INDEX" => Token::Index,
+            "ON" => Token::On,
+
 
             "PRIMARY" => Token::Primary,
             "KEY" => Token::Key,

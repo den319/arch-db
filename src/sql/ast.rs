@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     CreateTable(CreateTable),
+    CreateIndex(CreateIndex),
+
 
     Insert(Insert),
 
@@ -15,6 +17,13 @@ pub enum Statement {
 pub struct CreateTable {
     pub table_name: String,
     pub columns: Vec<ColumnDef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateIndex {
+    pub index_name: String,
+    pub table_name: String,
+    pub column_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

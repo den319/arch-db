@@ -174,6 +174,30 @@
   - Removed invalid `limit`/`order_by` fields from `Delete` and `Update` struct initializers
 - Fixed `test_delete_multiple_rows` column ordering assertion (alphabetical from BTreeMap)
 
+### 2026-07-09 — Explicit PRIMARY KEY Syntax
+- Added `Primary` and `Key` token variants to `Token` enum (`src/sql/token.rs`)
+- Extended lexer (`src/sql/lexer.rs`) to recognize `PRIMARY` and `KEY` keywords
+- Updated `parse_column_definition()` in `src/sql/sql_parser.rs`:
+  - After parsing column name and data type, checks for optional `PRIMARY KEY` keywords
+  - Sets `primary_key: true` on the `ColumnDef` when present
+- Updated `ColumnDef` in `src/sql/ast.rs` with `primary_key: bool` field
+- Updated `Column` in `src/sql/catalog.rs` — `primary_key` flag added to the struct but **not yet persisted** in serialization
+  - `serialize()` and `deserialize()` only encode column names and types (PK flag is lost on restart)
+  - Persisting the PK flag across restarts is left as future work
+- Updated `execute_create_table()` in `src/sql/executor.rs`:
+  - Validates exactly one PRIMARY KEY column (rejects 0 or multiple)
+  - Maps `column.primary_key` to `Column.primary_key` and `Column.nullable`
+  - Error messages: "table must contain exactly one PRIMARY KEY" / "multiple PRIMARY KEY columns are not allowed"
+- `can_use_primary_key_lookup()` now uses the declared primary key column (via `table.schema.primary_key()`)
+  instead of implicitly treating the first column as PK
+- `execute_update()` rejects attempts to modify the primary key column
+- Updated all test files to use explicit `primary_key: true`/`primary_key: false` in `ColumnDef` initializers:
+  - `executor_tests.rs` — all 80+ ColumnDef instances now include the field
+  - `parser_tests.rs` — CREATE TABLE parsing tests updated for PRIMARY KEY syntax
+  - `token_tests.rs` — new PRIMARY/KEY token tests added
+  - `row_tests.rs`, `table_tests.rs`, `catalog_tests.rs` — updated field usage
+- All 285 tests pass (0 failures)
+
 ## Known Issues & Technical Debt
 - `MergeIterator` is no longer used directly (replaced by `UnifiedStorageIterator`) — should be removed
 - `engine_iterator.rs` wraps `UnifiedStorageIterator` with minimal logic — could be inlined

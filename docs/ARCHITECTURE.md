@@ -29,13 +29,13 @@ src/
 ├── schema.rs           # Schema definitions
 └── sql/
     ├── mod.rs          # SQL module declarations
-    ├── token.rs        # SQL token types
+    ├── token.rs        # SQL token types (including PRIMARY, KEY)
     ├── lexer.rs        # SQL tokenizer
-    ├── parser.rs       # SQL → AST parser
-    ├── ast.rs          # SQL AST node types
+    ├── sql_parser.rs   # SQL → AST parser (supports PRIMARY KEY syntax)
+    ├── ast.rs          # SQL AST node types (ColumnDef has primary_key: bool)
     ├── executor.rs     # SQL statement executor (CREATE, INSERT, SELECT, UPDATE, DELETE)
     ├── expression.rs   # WHERE clause expression evaluator
-    ├── catalog.rs      # Table schema metadata store
+    ├── catalog.rs      # Table schema metadata store (Column has primary_key: bool)
     ├── row.rs          # Row type with serialization/deserialization
     └── table.rs        # Table helper: storage key generation, primary key handling
 ```
@@ -114,6 +114,20 @@ This is one of the most important rules of an LSM database. When reading a key, 
 SQL String → Lexer → Token Stream → Parser → AST → Executor → QueryResult
 ```
 
+### CREATE TABLE Flow
+
+```
+CREATE TABLE users (
+    id INT PRIMARY KEY,
+    name TEXT
+);
+```
+
+1. **Parser** parses each column definition. After parsing the data type, it checks for optional `PRIMARY KEY` keywords.
+2. **Validation** (`execute_create_table`): Exactly one column must have `primary_key: true`. Rejects 0 or multiple PKs with descriptive errors.
+3. **Schema construction**: Each `ColumnDef` is converted to a `Column` with `primary_key` and `nullable` flags.
+4. **Catalog registration**: Schema is stored in the in-memory catalog and persisted to the storage engine with a `__schema__:` prefix key.
+
 ### Executor Flow (SELECT)
 
 ```
@@ -122,6 +136,7 @@ execute_select(stmt)
   │
   ├─ FAST PATH (Primary Key Lookup):
   │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Identifies PK column via `table.schema.primary_key()` (not first-column assumption)
   │   → Direct key lookup via Engine.get()
   │   → O(log n) — single key lookup
   │   → Deserialize row, project columns, return
@@ -136,8 +151,6 @@ execute_select(stmt)
       → Return
 ```
 
-This optimization is significant: primary key lookups avoid reading all SSTable blocks, while full scans must iterate over every row in the database.
-
 ### Executor Flow (DELETE)
 
 ```
@@ -147,6 +160,7 @@ execute_delete(stmt)
   │
   ├─ FAST PATH (Primary Key Lookup):
   │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Identifies PK column via `table.schema.primary_key()`
   │   → Direct key lookup via Engine.get()
   │   → Write Tombstone via Engine.delete()
   │   → Return "1 row deleted"
@@ -170,8 +184,10 @@ execute_update(stmt)
   │
   ├─ FAST PATH (Primary Key Lookup):
   │   Condition: WHERE clause is `primary_key = <literal>`
+  │   → Identifies PK column via `table.schema.primary_key()`
   │   → Direct key lookup via Engine.get()
   │   → Apply SET assignments to deserialized row
+  │   → Rejects attempts to modify the PK column
   │   → Re-serialize and write back via Engine.put()
   │   → Return "1 row updated"
   │
@@ -181,6 +197,7 @@ execute_update(stmt)
       → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
         → Apply SET assignments to matching rows
+        → Rejects attempts to modify the PK column
         → Re-serialize and write back via Engine.put()
       → Return "{n} row(s) updated"
 ```
@@ -212,6 +229,21 @@ enum DatabaseError {
     Io(io::Error),
     Other(String),
 }
+
+// Column definition (AST)
+struct ColumnDef {
+    name: String,
+    data_type: DataType,
+    primary_key: bool,  // false by default; true if PRIMARY KEY specified
+}
+
+// Column (catalog schema)
+struct Column {
+    name: String,
+    data_type: CatalogDataType,
+    primary_key: bool,
+    nullable: bool,  // false for PK columns, true for non-PK
+}
 ```
 
 ### Storage Key Format
@@ -229,6 +261,10 @@ Example: `"users:42"`, `"products:abc123"`
 - `|` separator between columns
 - Columns are stored in BTreeMap order (alphabetical) in the serialized format
 
+### Primary Key Persistence
+
+The catalog schema is serialized to and deserialized from the storage engine (via `__schema__:table_name` keys). Currently, the `primary_key` flag is **not** preserved in serialization — the `serialize()` and `deserialize()` methods in `catalog.rs` only encode column names and types. On restart, all columns are loaded with `primary_key: false`. This means PK metadata is only valid for the current session. This should be addressed in a future update.
+
 ### Column Ordering in Query Results
 
 When projecting rows with `SELECT *` (Wildcard), columns are returned in the order they were defined in `CREATE TABLE`, not in alphabetical order. This is achieved by iterating over the schema's column list rather than the row's internal BTreeMap. For explicit column selection (`SELECT col1, col2`), columns are returned in the order specified in the query.
@@ -245,12 +281,9 @@ StorageIterator (trait)
 
 ## Current Limitations
 
-- No ORDER BY or LIMIT support
 - No secondary indexes
-- Primary key is implicitly the first column (no explicit PK syntax)
 - No transaction support
 - CLI uses raw Command interface, not SQL
 - MergeIterator is no longer used (replaced by UnifiedStorageIterator) — should be removed
 - Parser panics on syntax errors instead of returning Result
 - memtable_limit is hardcoded to 1000
-- Block cache size is hardcoded to 64 blocks

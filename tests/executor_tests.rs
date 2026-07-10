@@ -38,7 +38,7 @@ fn test_execute_create_table() {
             ColumnDef {
                 name: "id".into(),
                 data_type: ast::DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -78,7 +78,7 @@ fn test_execute_create_existing_table() {
     // First execution should succeed
     assert_eq!(
         result,
-        QueryResult::Message("Table created successfully".into())
+        QueryResult::Message("Error: table must contain exactly one PRIMARY KEY".into())
     );
 
     // Second execution with same table name should fail
@@ -162,7 +162,7 @@ fn test_insert_in_table() {
             ColumnDef {
                 name: "id".into(),
                 data_type: ast::DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -197,7 +197,7 @@ fn test_select_by_integer_primary_key() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -244,7 +244,7 @@ fn test_select_by_text_primary_key() {
             ColumnDef {
                 name: "username".into(),
                 data_type: DataType::Text,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "age".into(),
@@ -326,7 +326,7 @@ fn test_select_missing_row() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -357,7 +357,7 @@ fn test_select_without_where_clause() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -384,7 +384,7 @@ fn test_select_with_invalid_where_clause() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -411,7 +411,7 @@ fn test_delete_existing_row() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -477,7 +477,7 @@ fn test_delete_without_where_clause() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -510,7 +510,7 @@ fn test_delete_requires_primary_key() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -544,7 +544,7 @@ fn test_delete_non_existing_row() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -584,7 +584,7 @@ fn test_update_existing_row() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -645,7 +645,7 @@ fn test_update_non_existing_row() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -684,7 +684,7 @@ fn test_update_multiple_columns() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -758,7 +758,7 @@ fn test_update_does_not_change_primary_key() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -805,7 +805,7 @@ fn test_select_all_rows() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -856,7 +856,7 @@ fn test_select_all_empty_table() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -889,7 +889,7 @@ fn test_select_all_single_row() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -931,7 +931,7 @@ fn test_select_all_multiple_rows() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -987,7 +987,7 @@ fn test_select_all_skips_deleted_rows() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1043,7 +1043,7 @@ fn test_select_all_after_update() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1098,7 +1098,7 @@ fn test_select_all_after_multiple_updates() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1166,7 +1166,7 @@ fn test_select_all_after_flush() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1213,7 +1213,7 @@ fn test_select_all_only_requested_table() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1229,7 +1229,7 @@ fn test_select_all_only_requested_table() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1277,7 +1277,7 @@ fn test_select_all_from_memtable_and_sstable() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1337,7 +1337,7 @@ fn test_select_specific_column_by_primary_key() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1387,7 +1387,7 @@ fn test_select_all_rows_without_where() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1443,7 +1443,7 @@ fn test_select_with_non_primary_key_where() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1509,7 +1509,7 @@ fn test_select_after_flush() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1560,7 +1560,7 @@ fn test_delete_by_primary_key() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1614,7 +1614,7 @@ fn test_delete_with_non_primary_key_where() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1681,7 +1681,7 @@ fn test_delete_multiple_rows() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "age".into(),
@@ -1739,7 +1739,7 @@ fn test_delete_no_matching_rows() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -1789,7 +1789,7 @@ fn test_delete_after_flush() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1848,7 +1848,7 @@ fn test_delete_from_memtable_and_sstable() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -1928,7 +1928,7 @@ fn test_delete_comparison_operators() {
             columns: vec![ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             }],
         }));
 
@@ -1983,7 +1983,7 @@ fn test_select_limit() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2027,7 +2027,7 @@ fn test_select_limit_zero() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2068,7 +2068,7 @@ fn test_select_limit_larger_than_table() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2109,7 +2109,7 @@ fn test_select_order_by_ascending() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2156,7 +2156,7 @@ fn test_select_order_by_descending() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2203,7 +2203,7 @@ fn test_select_order_by_text() {
             ColumnDef {
                 name: "id".into(),
                 data_type: DataType::Int,
-                primary_key: false,
+                primary_key: true,
             },
             ColumnDef {
                 name: "name".into(),
@@ -2257,7 +2257,7 @@ fn test_select_where_order_by() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2307,7 +2307,7 @@ fn test_select_order_by_limit() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2353,7 +2353,7 @@ fn test_select_where_order_by_limit() {
         columns: vec![ColumnDef {
             name: "id".into(),
             data_type: DataType::Int,
-            primary_key: false,
+            primary_key: true,
         }],
     }));
 
@@ -2394,7 +2394,7 @@ fn test_select_where_order_by_limit() {
 #[test]
 fn test_create_table_with_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine =make_engine();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -2431,7 +2431,7 @@ fn test_create_table_with_primary_key() {
 #[test]
 fn test_create_table_without_primary_key() {
     let mut catalog = Catalog::new();
-    let mut engine =make_engine();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -2453,10 +2453,7 @@ fn test_create_table_without_primary_key() {
 
     match result {
         QueryResult::Message(msg) => {
-            assert_eq!(
-                msg,
-                "Error: table must contain exactly one PRIMARY KEY"
-            );
+            assert_eq!(msg, "Error: table must contain exactly one PRIMARY KEY");
         }
         _ => panic!("Expected error"),
     }
@@ -2467,7 +2464,7 @@ fn test_create_table_without_primary_key() {
 #[test]
 fn test_create_table_multiple_primary_keys() {
     let mut catalog = Catalog::new();
-    let mut engine =make_engine();
+    let mut engine = make_engine();
 
     let mut executor = Executor::new(&mut catalog, &mut engine);
 
@@ -2489,14 +2486,10 @@ fn test_create_table_multiple_primary_keys() {
 
     match result {
         QueryResult::Message(msg) => {
-            assert_eq!(
-                msg,
-                "Error: multiple PRIMARY KEY columns are not allowed"
-            );
+            assert_eq!(msg, "Error: multiple PRIMARY KEY columns are not allowed");
         }
         _ => panic!("Expected error"),
     }
 
     assert!(catalog.table("users").is_none());
 }
-

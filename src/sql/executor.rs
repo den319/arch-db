@@ -41,6 +41,10 @@ impl<'a> Executor<'a> {
                     QueryResult::Message(format!("Error: {}", e))
                 }),
 
+            Statement::CreateIndex(_) => {
+                todo!("CREATE INDEX not implemented yet")
+            }
+
             Statement::Insert(statement) =>
                 self.execute_insert(statement).unwrap_or_else(|e| {
                     QueryResult::Message(format!("Error: {}", e))

@@ -1104,3 +1104,68 @@ fn test_parse_key_without_primary() {
     parser.parse_statement();
 }
 
+#[test]
+fn test_parse_create_index() {
+    let lexer = Lexer::new(
+        "CREATE INDEX idx_users_name ON users(name);",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::CreateIndex(create) => {
+            assert_eq!(create.index_name, "idx_users_name");
+            assert_eq!(create.table_name, "users");
+            assert_eq!(create.column_name, "name");
+        }
+
+        _ => panic!("Expected CREATE INDEX"),
+    }
+}
+
+#[test]
+fn test_parse_create_index_different_names() {
+    let lexer = Lexer::new(
+        "CREATE INDEX idx_email ON customers(email);",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::CreateIndex(create) => {
+            assert_eq!(create.index_name, "idx_email");
+            assert_eq!(create.table_name, "customers");
+            assert_eq!(create.column_name, "email");
+        }
+
+        _ => panic!("Expected CREATE INDEX"),
+    }
+}
+
+#[test]
+#[should_panic]
+fn test_parse_create_index_missing_column() {
+    let lexer = Lexer::new(
+        "CREATE INDEX idx ON users();",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    parser.parse_statement();
+}
+
+#[test]
+#[should_panic]
+fn test_parse_create_index_missing_on() {
+    let lexer = Lexer::new(
+        "CREATE INDEX idx users(name);",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    parser.parse_statement();
+}

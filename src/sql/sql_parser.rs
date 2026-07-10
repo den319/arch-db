@@ -207,7 +207,25 @@ impl SQLParser {
 
         self.expect(Token::Create);
 
-        self.expect(Token::Table);
+        match &self.current_token {
+
+            Token::Table => {
+                self.advance();
+                self.expect(Token::Table);
+            }
+
+            Token::Index => {
+                self.advance();
+                self.parse_create_index();
+            }
+
+            token => {
+                panic!(
+                    "Expected TABLE or INDEX after CREATE, found {:?}",
+                    token
+                );
+            }
+        }
 
         let table_name = self.parse_identifier();
 
@@ -302,6 +320,31 @@ impl SQLParser {
             op,
             right: Box::new(right),
         }
+    }
+
+    fn parse_create_index(
+        &mut self,
+    ) -> Statement {
+
+        let index_name = self.parse_identifier();
+
+        self.expect(Token::On);
+
+        let table_name = self.parse_identifier();
+
+        self.expect(Token::LeftParen);
+
+        let column_name = self.parse_identifier();
+
+        self.expect(Token::RightParen);
+
+        self.consume_optional_semicolon();
+
+        Statement::CreateIndex(CreateIndex {
+            index_name,
+            table_name,
+            column_name,
+        })
     }
 
     fn parse_select(&mut self) -> Statement {

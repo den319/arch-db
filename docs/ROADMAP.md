@@ -42,7 +42,7 @@
 
 ### Phase 3 — Indexing
 - [ ] Secondary indexes — non-primary key index support
-- [ ] Explicit PRIMARY KEY syntax in CREATE TABLE — instead of first-column default
+- [x] Explicit PRIMARY KEY syntax in CREATE TABLE — with `PRIMARY KEY` keyword support
 
 ### Phase 4 — Query Optimization
 - [ ] Query planner — choose index scan vs. table scan based on cost estimation

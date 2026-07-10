@@ -124,11 +124,19 @@ This means reads and compaction can happen in parallel, which is essential for r
 
 ---
 
-## Why first column is implicitly the primary key?
+## Why explicit PRIMARY KEY syntax instead of implicit first-column PK?
 
-**Decision:** In `execute_create_table`, the first column is automatically marked as the primary key.
+**Decision:** Use an explicit `PRIMARY KEY` keyword in `CREATE TABLE` column definitions. A table must have exactly one column marked as PRIMARY KEY.
 
-**Reason:** The parser does not yet support `PRIMARY KEY` syntax in `CREATE TABLE`. Making the first column the PK by default is a pragmatic choice that allows INSERT/SELECT/UPDATE/DELETE to work immediately. This is documented in the roadmap as "Explicit PRIMARY KEY syntax" for Phase 3.
+**Reason:** The initial implementation treated the first column as the implicit primary key, which was fragile and unintuitive. Users could not control which column was the PK — `CREATE TABLE users (name TEXT, id INT)` would make `name` the PK, which is almost certainly wrong. The current approach:
+1. Adds `primary_key: bool` to `ColumnDef` in the AST
+2. The parser (`sql_parser.rs`) checks for optional `PRIMARY KEY` keywords after the data type in each column definition
+3. `execute_create_table` validates exactly one PK exists (rejects 0 or multiple)
+4. Fast-path lookups in SELECT/UPDATE/DELETE use `table.schema.primary_key()` to identify the PK column
+
+**Known limitation:** The `primary_key` flag is **not** currently persisted in the catalog schema serialization format. The `serialize()` and `deserialize()` methods in `catalog.rs` only encode column names and types. On engine restart, all columns are loaded with `primary_key: false`. This means PK metadata is only valid for the current session and must be addressed in a future update.
+
+This matches standard SQL semantics and gives users control over which column serves as the row identifier for the storage engine.
 
 ---
 

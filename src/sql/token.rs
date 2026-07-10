@@ -20,6 +20,8 @@ pub enum Token {
     Limit,
     Asc,
     Desc,
+    Index,
+    On,
 
     Primary,
     Key,
@@ -68,6 +70,9 @@ impl Display for Token {
             Token::Limit => write!(f, "LIMIT"),
             Token::Asc => write!(f, "ASC"),
             Token::Desc => write!(f, "DESC"),
+            Token::Index => write!(f, "INDEX"),
+            Token::On => write!(f, "ON"),
+
 
             Token::Primary => write!(f, "PRIMARY"),
             Token::Key => write!(f, "KEY"),

@@ -420,3 +420,31 @@ fn test_primary_key_tokens() {
     assert_eq!(lexer.next_token(), Token::Key);
     assert_eq!(lexer.next_token(), Token::EOF);
 }
+
+#[test]
+fn test_create_index_tokens() {
+    let mut lexer = Lexer::new(
+        "CREATE INDEX idx_users_name ON users(name);",
+    );
+
+    assert_eq!(lexer.next_token(), Token::Create);
+    assert_eq!(lexer.next_token(), Token::Index);
+    assert_eq!(
+        lexer.next_token(),
+        Token::Identifier("idx_users_name".into())
+    );
+    assert_eq!(lexer.next_token(), Token::On);
+    assert_eq!(
+        lexer.next_token(),
+        Token::Identifier("users".into())
+    );
+    assert_eq!(lexer.next_token(), Token::LeftParen);
+    assert_eq!(
+        lexer.next_token(),
+        Token::Identifier("name".into())
+    );
+    assert_eq!(lexer.next_token(), Token::RightParen);
+    assert_eq!(lexer.next_token(), Token::Semicolon);
+    assert_eq!(lexer.next_token(), Token::EOF);
+}
+

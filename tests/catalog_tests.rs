@@ -139,7 +139,7 @@ fn test_create_table_persists_schema() {
                     ColumnDef {
                         name: "id".into(),
                         data_type: DataType::Int,
-                        primary_key:false,
+                        primary_key:true,
                     },
                     ColumnDef {
                         name: "name".into(),
