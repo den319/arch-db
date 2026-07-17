@@ -25,6 +25,7 @@ impl SQLParser {
 
     pub fn expect(&mut self, expected: Token) {
         if self.current_token != expected {
+            
             panic!(
                 "Expected {:?}, found {:?}",
                 expected,
@@ -211,12 +212,11 @@ impl SQLParser {
 
             Token::Table => {
                 self.advance();
-                self.expect(Token::Table);
             }
 
             Token::Index => {
                 self.advance();
-                self.parse_create_index();
+                return self.parse_create_index();
             }
 
             token => {
@@ -337,8 +337,6 @@ impl SQLParser {
         let column_name = self.parse_identifier();
 
         self.expect(Token::RightParen);
-
-        self.consume_optional_semicolon();
 
         Statement::CreateIndex(CreateIndex {
             index_name,

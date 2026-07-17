@@ -1,4 +1,4 @@
-use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -41,8 +41,14 @@ impl<'a> Executor<'a> {
                     QueryResult::Message(format!("Error: {}", e))
                 }),
 
-            Statement::CreateIndex(_) => {
-                todo!("CREATE INDEX not implemented yet")
+            Statement::CreateIndex(stmt) => {
+                match self.execute_create_index(stmt) {
+                    Ok(result) => result,
+                    Err(err) => QueryResult::Message(format!(
+                        "Error: {}",
+                        err,
+                    )),
+                }
             }
 
             Statement::Insert(statement) =>
@@ -235,6 +241,187 @@ impl<'a> Executor<'a> {
         values
     }
 
+    fn build_index(
+        &mut self,
+        schema: &TableSchema,
+        index: &IndexSchema,
+    ) -> Result<()> {
+
+        // Scan every row in the table.
+        let rows = self.scan_table(&schema.name)?;
+
+        // Locate the primary-key column.
+        let pk_column = schema
+            .columns
+            .iter()
+            .find(|c| c.primary_key)
+            .ok_or_else(|| {
+                DatabaseError::Other(
+                    "table has no primary key".into(),
+                )
+            })?;
+
+        for (_, row) in rows {
+
+
+            let indexed_value = row
+                .get(&index.column_name)
+                .ok_or_else(|| DatabaseError::Other(format!(
+                        "column: '{}' missing from row",
+                        index.column_name,
+                    )))?
+                .as_storage_string();
+
+            let primary_key = row
+                .get(&pk_column.name)
+                .ok_or_else(|| DatabaseError::Other(format!(
+                        "primary key: '{}' missing from row",
+                        index.column_name,
+                    )))?
+                .as_storage_string();
+
+            //----------------------------------------------------------
+            // Build storage key
+            //----------------------------------------------------------
+
+            let storage_key = Self::make_index_storage_key(
+    &schema.name,
+                &index.column_name,
+                row.get(&index.column_name).unwrap(),
+                row.get(&pk_column.name).unwrap(),
+            );
+
+            self.engine.put(
+                storage_key,
+                String::new(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn insert_index_entries(
+        &mut self,
+        schema: &TableSchema,
+        row: &Row,
+    ) -> Result<()> {
+
+        // Locate the primary-key column.
+        let pk_column = schema
+            .columns
+            .iter()
+            .find(|c| c.primary_key)
+            .ok_or_else(|| {
+                DatabaseError::Other(
+                    "table has no primary key".into(),
+                )
+            })?;
+
+        let pk_value = row
+            .get(&pk_column.name)
+            .ok_or_else(|| {
+                DatabaseError::Other(
+                    "primary key missing from row".into(),
+                )
+            })?;
+
+        // Walk through every index.
+        for index in self.catalog.indexes_for_table(&schema.name) {
+
+            let column_value = row
+                .get(&index.column_name)
+                .ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "column '{}' missing from row",
+                        index.column_name,
+                    ))
+                })?;
+
+            let storage_key = Self::make_index_storage_key(
+                &schema.name,
+                &index.column_name,
+                column_value,
+                pk_value,
+            );
+
+            self.engine.put(
+                storage_key,
+                String::new(),
+            )?;
+        }
+
+        Ok(())
+    }
+    
+
+    pub fn indexes_for_table(
+        &self,
+        table_name: &str,
+    ) -> Vec<&IndexSchema> {
+
+        self.catalog.indexes
+            .values()
+            .filter(|idx| idx.table_name == table_name)
+            .collect()
+    }
+
+    fn delete_index_entries(
+        &mut self,
+        schema: &TableSchema,
+        row: &Row,
+    ) -> Result<()> {
+
+        //----------------------------------------------------------
+        // Locate primary-key column
+        //----------------------------------------------------------
+
+        let pk_column = schema
+            .columns
+            .iter()
+            .find(|c| c.primary_key)
+            .ok_or_else(|| {
+                DatabaseError::Other(
+                    "table has no primary key".into(),
+                )
+            })?;
+
+        let pk_value = row
+            .get(&pk_column.name)
+            .ok_or_else(|| {
+                DatabaseError::Other(
+                    "primary key missing".into(),
+                )
+            })?;
+
+        //----------------------------------------------------------
+        // Remove every index entry
+        //----------------------------------------------------------
+
+        for index in self.catalog.indexes_for_table(&schema.name) {
+
+            let column_value = row
+                .get(&index.column_name)
+                .ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "column '{}' missing",
+                        index.column_name,
+                    ))
+                })?;
+
+            let storage_key = Self::make_index_storage_key(
+                &schema.name,
+                &index.column_name,
+                column_value,
+                pk_value,
+            );
+
+            self.engine.delete(storage_key)?;
+        }
+
+        Ok(())
+    }
+
+
     pub fn execute_create_table(
         &mut self,
         stmt: CreateTable,
@@ -302,6 +489,108 @@ impl<'a> Executor<'a> {
         ))
     }
 
+    fn make_index_storage_key(
+        table_name: &str,
+        column_name: &str,
+        column_value: &RowValue,
+        primary_key: &RowValue,
+    ) -> String {
+
+        let value = column_value.as_storage_string();
+        let pk = primary_key.as_storage_string();
+
+        format!(
+            "__index__:{}:{}:{}:{}",
+            table_name,
+            column_name,
+            value,
+            pk,
+        )
+    }
+
+    pub fn execute_create_index(
+        &mut self,
+        stmt: CreateIndex,
+    ) -> Result<QueryResult> {
+
+        //----------------------------------------------------------
+        // Validate table
+        //----------------------------------------------------------
+
+        let schema = match self.catalog.table(&stmt.table_name) {
+
+            Some(schema) => schema.clone(),
+
+            None => {
+                return Err(DatabaseError::Other(format!(
+                    "table '{}' does not exist",
+                    stmt.table_name,
+                )));
+            }
+        };
+
+        //----------------------------------------------------------
+        // Validate column
+        //----------------------------------------------------------
+
+        if !schema
+            .columns
+            .iter()
+            .any(|c| c.name == stmt.column_name)
+        {
+            return Err(DatabaseError::Other(format!(
+                "unknown column '{}'",
+                stmt.column_name,
+            )));
+        }
+
+        //----------------------------------------------------------
+        // Register metadata
+        //----------------------------------------------------------
+
+        let index = IndexSchema {
+            name: stmt.index_name.clone(),
+            table_name: stmt.table_name.clone(),
+            column_name: stmt.column_name.clone(),
+        };
+
+        self.catalog.create_index(index.clone())?;
+
+        let index_schema = IndexSchema {
+            name: stmt.index_name.clone(),
+            table_name: stmt.table_name.clone(),
+            column_name: stmt.column_name.clone(),
+        };
+
+        let storage_key = format!(
+            "__index_meta__:{}",
+            index_schema.name,
+        );
+
+        if let Err(err) = self.engine.put(
+            storage_key,
+            index_schema.serialize(),
+        ) {
+            return Ok(QueryResult::Message(format!(
+                "Error: {}",
+                err
+            )))
+        }
+
+        //----------------------------------------------------------
+        // Build physical index
+        //----------------------------------------------------------
+
+        self.build_index(
+            &schema,
+            &index,
+        )?;
+
+        Ok(QueryResult::Message(
+            "Index created successfully".into(),
+        ))
+    }
+
     pub fn execute_insert(
         &mut self,
         stmt: Insert,
@@ -314,7 +603,7 @@ impl<'a> Executor<'a> {
             ))?
             .clone();
 
-        let table = Table::new(schema);
+        let table = Table::new(schema.clone());
 
         let mut values = Vec::new();
 
@@ -341,6 +630,11 @@ impl<'a> Executor<'a> {
 
         self.engine
             .put(key, bytes)?;
+
+        self.insert_index_entries(
+            &schema,
+            &row,
+        )?;
 
         Ok(QueryResult::Message(
             "Insert parsed successfully".into(),
@@ -607,13 +901,11 @@ impl<'a> Executor<'a> {
                 }
             };
 
-            match self.engine.delete(key) {
-
-                Ok(_) => {
-                    return QueryResult::Message(
-                        "1 row deleted".into(),
-                    );
-                }
+            let rows = match self.matching_rows(
+                &stmt.table_name,
+                &where_clause,
+            ) {
+                Ok(rows) => rows,
 
                 Err(err) => {
                     return QueryResult::Message(format!(
@@ -621,7 +913,37 @@ impl<'a> Executor<'a> {
                         err
                     ));
                 }
+            };
+
+            if rows.is_empty() {
+                return QueryResult::Message(
+                    "0 rows deleted".into(),
+                );
             }
+
+            let (key, row) = &rows[0];
+
+            if let Err(err) = self.delete_index_entries(
+                &table.schema,
+                row,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
+            return match self.engine.delete(key.clone()) {
+
+                Ok(_) => QueryResult::Message(
+                    "1 row deleted".into(),
+                ),
+
+                Err(err) => QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                )),
+            };
         }
 
         //----------------------------------------------------------
@@ -651,7 +973,17 @@ impl<'a> Executor<'a> {
 
         let deleted = rows.len();
 
-        for (key, _) in rows {
+        for (key, row) in rows {
+
+            if let Err(err) = self.delete_index_entries(
+                &table.schema,
+                &row,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
 
             if let Err(err) = self.engine.delete(key) {
 
@@ -724,6 +1056,8 @@ impl<'a> Executor<'a> {
 
             let mut row = Row::deserialize(&row_data);
 
+            let old_row = row.clone();
+
             let pk_name = schema
                 .primary_key()
                 .expect("table should have a primary key")
@@ -763,11 +1097,33 @@ impl<'a> Executor<'a> {
                 }
             }
 
+            // Remove old index entries.
+            if let Err(err) = self.delete_index_entries(
+                &schema,
+                &old_row,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
             let serialized = row.serialize();
 
             if let Err(err) = self.engine.put(
-                key,
+                key.clone(),
                 serialized,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
+            // Insert new index entries.
+            if let Err(err) = self.insert_index_entries(
+                &schema,
+                &row,
             ) {
                 return QueryResult::Message(format!(
                     "Error: {}",
@@ -815,6 +1171,8 @@ impl<'a> Executor<'a> {
 
         for (key, mut row) in rows {
 
+            let old_row = row.clone();
+
             for assignment in &stmt.assignments {
 
                 if assignment.column == pk_name {
@@ -848,11 +1206,33 @@ impl<'a> Executor<'a> {
                 }
             }
 
+            // Remove old index entries.
+            if let Err(err) = self.delete_index_entries(
+                &schema,
+                &old_row,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
             let serialized = row.serialize();
 
             if let Err(err) = self.engine.put(
-                key,
+                key.clone(),
                 serialized,
+            ) {
+                return QueryResult::Message(format!(
+                    "Error: {}",
+                    err
+                ));
+            }
+
+            // Insert updated index entries.
+            if let Err(err) = self.insert_index_entries(
+                &schema,
+                &row,
             ) {
                 return QueryResult::Message(format!(
                     "Error: {}",

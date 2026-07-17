@@ -60,6 +60,11 @@ fn main() {
         return;
     }
 
+    if let Err(err) = catalog.load_indexes_from_engine(&mut engine) {
+        println!("Failed to load indexes: {}", err);
+        return;
+    }
+
     
 
     loop {

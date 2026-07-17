@@ -113,3 +113,12 @@ impl Row {
         row
     }
 }
+
+impl RowValue {
+    pub fn as_storage_string(&self) -> String {
+        match self {
+            RowValue::Integer(i) => i.to_string(),
+            RowValue::Text(s) => s.clone(),
+        }
+    }
+}

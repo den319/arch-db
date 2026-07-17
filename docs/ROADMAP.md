@@ -41,10 +41,12 @@
 - [x] LIMIT — restrict number of returned rows
 
 ### Phase 3 — Indexing
-- [ ] Secondary indexes — non-primary key index support
 - [x] Explicit PRIMARY KEY syntax in CREATE TABLE — with `PRIMARY KEY` keyword support
+- [x] Secondary indexes — CREATE INDEX support with index maintenance on INSERT/UPDATE/DELETE
+- [x] Index metadata persistence and recovery across restarts
 
 ### Phase 4 — Query Optimization
+- [ ] Use indexes for query execution — index-scan lookups for WHERE clauses on indexed columns
 - [ ] Query planner — choose index scan vs. table scan based on cost estimation
 
 ### Phase 5 — Transactions & Concurrency
@@ -64,3 +66,4 @@
 - Replication
 - Prepared statements
 - Connection pooling
+- Persist `primary_key` flag in catalog schema serialization

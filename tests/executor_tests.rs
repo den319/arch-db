@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use arch_db::sql::ast::{OrderBy, OrderDirection};
+use arch_db::sql::ast::{CreateIndex, OrderBy, OrderDirection};
+use arch_db::sql::catalog::IndexSchema;
 use arch_db::{
     engine::{Engine, Value},
     sql::{
@@ -24,6 +25,50 @@ fn make_engine() -> Engine {
     let _ = fs::remove_dir_all(&path);
     Engine::with_storage_path(&path)
 }
+
+fn scan_index_keys(engine: &mut Engine) -> Vec<String> {
+    engine
+        .scan("__index__", "__index__~")
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect()
+}
+
+fn create_users_table(executor: &mut Executor) {
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+            ColumnDef {
+                name: "age".into(),
+                data_type: DataType::Int,
+                primary_key: false,
+            },
+        ],
+    }));
+}
+
+fn insert_user(executor: &mut Executor, id: i64, name: &str, age: i64) {
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into(), "age".into()],
+        values: vec![
+            Expr::Number(id),
+            Expr::String(name.into()),
+            Expr::Number(age),
+        ],
+    }));
+}
+
 
 #[test]
 fn test_execute_create_table() {
@@ -563,12 +608,7 @@ fn test_delete_non_existing_row() {
         }),
     }));
 
-    assert_eq!(result, QueryResult::Message("1 row deleted".into()));
-
-    match executor.engine.get("users:99") {
-        Some(Value::Tombstone) => {}
-        other => panic!("Expected tombstone, got {:?}", other),
-    }
+    assert_eq!(result, QueryResult::Message("0 rows deleted".into()));
 }
 
 #[test]
@@ -2493,3 +2533,952 @@ fn test_create_table_multiple_primary_keys() {
 
     assert!(catalog.table("users").is_none());
 }
+
+#[test]
+fn test_create_index_success() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    let result = executor.execute(
+        Statement::CreateIndex(CreateIndex {
+            index_name: "idx_users_name".into(),
+            table_name: "users".into(),
+            column_name: "name".into(),
+        }),
+    );
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert_eq!(msg, "Index created successfully");
+        }
+
+        _ => panic!("Expected success"),
+    }
+}
+
+#[test]
+fn test_create_index_unknown_table() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    let result = executor.execute(
+        Statement::CreateIndex(CreateIndex {
+            index_name: "idx".into(),
+            table_name: "users".into(),
+            column_name: "name".into(),
+        }),
+    );
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert!(
+                msg.contains("does not exist")
+            );
+        }
+
+        _ => panic!("Expected error"),
+    }
+}
+
+#[test]
+fn test_create_index_unknown_column() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(&mut catalog, &mut engine);
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+        ],
+    }));
+
+    let result = executor.execute(
+        Statement::CreateIndex(CreateIndex {
+            index_name: "idx".into(),
+            table_name: "users".into(),
+            column_name: "email".into(),
+        }),
+    );
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert!(
+                msg.contains("unknown column")
+            );
+        }
+
+        _ => panic!("Expected error")
+    }
+}
+
+#[test]
+fn test_create_index_on_empty_table() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    let result = executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_users_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert_eq!(msg, "Index created successfully");
+        }
+        _ => panic!("Expected success"),
+    }
+
+    let entries = scan_index_keys(&mut engine);
+
+    assert_eq!(entries.len(), 0);
+}
+
+#[test]
+fn test_create_index_single_row() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "id".into(),
+            "name".into(),
+        ],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+        ],
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_users_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    let entries = scan_index_keys(&mut engine);
+
+
+    assert_eq!(entries.len(), 1);
+
+    assert_eq!(
+        entries[0],
+        "__index__:users:name:Alice:1"
+    );
+}
+
+#[test]
+fn test_create_index_duplicate_values() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    for (id, name) in [
+        (1, "Alice"),
+        (2, "Bob"),
+        (3, "Alice"),
+    ] {
+
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+            ],
+            values: vec![
+                Expr::Number(id),
+                Expr::String(name.into()),
+            ],
+        }));
+    }
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_users_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    let entries = scan_index_keys(&mut engine);
+
+
+    let keys: Vec<String> = entries
+        .iter()
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+            "__index__:users:name:Alice:3",
+            "__index__:users:name:Bob:2",
+        ]
+    );
+}
+
+#[test]
+fn test_create_index_integer_column() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "age".into(),
+                data_type: DataType::Int,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "id".into(),
+            "age".into(),
+        ],
+        values: vec![
+            Expr::Number(1),
+            Expr::Number(25),
+        ],
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_age".into(),
+        table_name: "users".into(),
+        column_name: "age".into(),
+    }));
+
+    let entries = scan_index_keys(&mut engine);
+
+
+    assert_eq!(
+        entries[0],
+        "__index__:users:age:25:1"
+    );
+}
+
+#[test]
+fn test_insert_updates_existing_index() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "id".into(),
+            "name".into(),
+        ],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+        ],
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "id".into(),
+            "name".into(),
+        ],
+        values: vec![
+            Expr::Number(2),
+            Expr::String("Bob".into()),
+        ],
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+            "__index__:users:name:Bob:2",
+        ]
+    );
+}
+
+#[test]
+fn test_insert_duplicate_index_values() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(1), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec!["id".into(), "name".into()],
+        values: vec![Expr::Number(2), Expr::String("Alice".into())],
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+            "__index__:users:name:Alice:2",
+        ]
+    );
+}
+
+#[test]
+fn test_insert_updates_multiple_indexes() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+            ColumnDef {
+                name: "age".into(),
+                data_type: DataType::Int,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_age".into(),
+        table_name: "users".into(),
+        column_name: "age".into(),
+    }));
+
+    executor.execute(Statement::Insert(Insert {
+        table_name: "users".into(),
+        columns: vec![
+            "id".into(),
+            "name".into(),
+            "age".into(),
+        ],
+        values: vec![
+            Expr::Number(1),
+            Expr::String("Alice".into()),
+            Expr::Number(25),
+        ],
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:age:25:1",
+            "__index__:users:name:Alice:1",
+        ]
+    );
+}
+
+#[test]
+fn test_create_index_after_multiple_inserts() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    executor.execute(Statement::CreateTable(CreateTable {
+        table_name: "users".into(),
+        columns: vec![
+            ColumnDef {
+                name: "id".into(),
+                data_type: DataType::Int,
+                primary_key: true,
+            },
+            ColumnDef {
+                name: "name".into(),
+                data_type: DataType::Text,
+                primary_key: false,
+            },
+        ],
+    }));
+
+    for (id, name) in [
+        (1, "Alice"),
+        (2, "Bob"),
+        (3, "Charlie"),
+    ] {
+        executor.execute(Statement::Insert(Insert {
+            table_name: "users".into(),
+            columns: vec![
+                "id".into(),
+                "name".into(),
+            ],
+            values: vec![
+                Expr::Number(id),
+                Expr::String(name.into()),
+            ],
+        }));
+    }
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+            "__index__:users:name:Bob:2",
+            "__index__:users:name:Charlie:3",
+        ]
+    );
+}
+
+#[test]
+fn test_update_updates_index_entry() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    create_users_table(&mut executor);
+
+    insert_user(&mut executor, 1, "Alice", 20);
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![
+            Assignment {
+                column: "name".into(),
+                value: Expr::String("Bob".into()),
+            },
+        ],
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("id".into())),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            },
+        ),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Bob:1",
+        ]
+    );
+}
+
+#[test]
+fn test_update_non_indexed_column_keeps_index() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    create_users_table(&mut executor);
+
+    insert_user(&mut executor, 1, "Alice", 20);
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![
+            Assignment {
+                column: "age".into(),
+                value: Expr::Number(30),
+            },
+        ],
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("id".into())),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            },
+        ),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+        ]
+    );
+}
+
+#[test]
+fn test_update_creates_duplicate_index_values() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    create_users_table(&mut executor);
+
+    insert_user(&mut executor, 1, "Alice", 20);
+    insert_user(&mut executor, 2, "Bob", 21);
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![
+            Assignment {
+                column: "name".into(),
+                value: Expr::String("Alice".into()),
+            },
+        ],
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("id".into())),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(2)),
+            },
+        ),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:name:Alice:1",
+            "__index__:users:name:Alice:2",
+        ]
+    );
+}
+
+#[test]
+fn test_update_updates_multiple_indexes() {
+
+    let mut catalog = Catalog::new();
+    let mut engine =make_engine();
+    let mut executor = Executor::new(
+        &mut catalog,
+        &mut engine,
+    );
+
+    create_users_table(&mut executor);
+
+    insert_user(&mut executor, 1, "Alice", 20);
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    }));
+
+    executor.execute(Statement::CreateIndex(CreateIndex {
+        index_name: "idx_age".into(),
+        table_name: "users".into(),
+        column_name: "age".into(),
+    }));
+
+    executor.execute(Statement::Update(Update {
+        table_name: "users".into(),
+        assignments: vec![
+            Assignment {
+                column: "name".into(),
+                value: Expr::String("Bob".into()),
+            },
+            Assignment {
+                column: "age".into(),
+                value: Expr::Number(30),
+            },
+        ],
+        where_clause: Some(
+            Expr::Binary {
+                left: Box::new(Expr::Identifier("id".into())),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expr::Number(1)),
+            },
+        ),
+    }));
+
+    let keys = scan_index_keys(&mut engine);
+
+    assert_eq!(
+        keys,
+        vec![
+            "__index__:users:age:30:1",
+            "__index__:users:name:Bob:1",
+        ]
+    );
+}
+
+#[test]
+fn test_index_schema_round_trip() {
+    let schema = IndexSchema {
+        name: "idx_name".into(),
+        table_name: "users".into(),
+        column_name: "name".into(),
+    };
+
+    let serialized = schema.serialize();
+
+    let deserialized =
+        IndexSchema::deserialize(&serialized).unwrap();
+
+    assert_eq!(schema, deserialized);
+}
+
+#[test]
+fn test_invalid_index_schema() {
+    let result =
+        IndexSchema::deserialize("invalid");
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_create_index_persists_metadata() {
+
+    let mut catalog = Catalog::new();
+
+    let mut engine =make_engine();
+    let mut executor =
+        Executor::new(&mut catalog, &mut engine);
+
+    create_users_table(&mut executor);
+
+    executor.execute(
+        Statement::CreateIndex(CreateIndex {
+            index_name: "idx_name".into(),
+            table_name: "users".into(),
+            column_name: "name".into(),
+        }),
+    );
+
+    let value = engine
+        .get("__index_meta__:idx_name")
+        .unwrap();
+
+    match value {
+        Value::Data(serialized) => {
+            let schema =
+                IndexSchema::deserialize(&serialized)
+                    .unwrap();
+
+            assert_eq!(schema.name, "idx_name");
+            assert_eq!(schema.table_name, "users");
+            assert_eq!(schema.column_name, "name");
+        }
+
+        _ => panic!("expected metadata"),
+    }
+}
+
+#[test]
+fn test_catalog_recovers_index_metadata() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    // First session
+    {
+        let mut executor =
+            Executor::new(
+                &mut catalog,
+                &mut engine,
+            );
+
+        create_users_table(&mut executor);
+
+        executor.execute(
+            Statement::CreateIndex(CreateIndex {
+                index_name: "idx_name".into(),
+                table_name: "users".into(),
+                column_name: "name".into(),
+            }),
+        );
+    }
+
+    // Simulate restart by creating a fresh catalog and
+    // loading from the same engine.
+    let mut recovered_catalog = Catalog::new();
+
+    recovered_catalog
+        .load_from_engine(&mut engine)
+        .unwrap();
+
+    recovered_catalog
+        .load_indexes_from_engine(&mut engine)
+        .unwrap();
+
+    let indexes =
+        recovered_catalog.indexes_for_table("users");
+
+    assert_eq!(indexes.len(), 1);
+
+    assert_eq!(
+        indexes[0].name,
+        "idx_name",
+    );
+}
+
+#[test]
+fn test_catalog_recovers_multiple_indexes() {
+
+    let mut catalog = Catalog::new();
+    let mut engine = make_engine();
+
+    // First session
+    {
+        let mut executor =
+            Executor::new(
+                &mut catalog,
+                &mut engine,
+            );
+
+        create_users_table(&mut executor);
+
+        executor.execute(
+            Statement::CreateIndex(CreateIndex {
+                index_name: "idx_name".into(),
+                table_name: "users".into(),
+                column_name: "name".into(),
+            }),
+        );
+
+        executor.execute(
+            Statement::CreateIndex(CreateIndex {
+                index_name: "idx_age".into(),
+                table_name: "users".into(),
+                column_name: "age".into(),
+            }),
+        );
+    }
+
+    // Simulate restart
+    let mut recovered_catalog = Catalog::new();
+
+    recovered_catalog
+        .load_from_engine(&mut engine)
+        .unwrap();
+
+    recovered_catalog
+        .load_indexes_from_engine(&mut engine)
+        .unwrap();
+
+    let indexes =
+        recovered_catalog.indexes_for_table("users");
+
+    assert_eq!(indexes.len(), 2);
+}
+

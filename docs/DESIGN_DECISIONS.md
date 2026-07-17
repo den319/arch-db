@@ -175,3 +175,60 @@ Using a single enum type allows the executor to return the appropriate result ty
 **Decision:** When projecting rows with `SelectItem::Wildcard`, iterate over the schema's column list rather than the row's internal BTreeMap.
 
 **Reason:** The `Row` type stores values in a `BTreeMap<String, RowValue>`, which iterates in alphabetical key order. If `SELECT *` used BTreeMap order, columns would appear in alphabetical order (e.g., `age` before `id`), which is confusing to users who defined columns in a specific order in `CREATE TABLE`. By iterating over the schema's column list (which preserves CREATE TABLE order), the output matches user expectations. This also matches the behavior of most SQL databases, where `SELECT *` returns columns in table definition order.
+
+---
+
+## Why `__index__:{table}:{column}:{value}:{pk}` as the index storage key format?
+
+**Decision:** Use a structured string format with `__index__` prefix for all secondary index entries.
+
+**Reason:** The format is designed to support efficient index-based lookups:
+
+1. **Prefix scanning**: To find all rows matching an indexed value, scan keys with prefix `__index__:{table}:{column}:{value}:`. This is a simple prefix match on the storage engine.
+2. **Uniqueness**: Including the primary key in the suffix ensures uniqueness even when multiple rows share the same indexed value.
+3. **Debuggability**: The format is human-readable — you can inspect index entries directly in the storage engine.
+4. **Consistency**: Follows the same `__prefix__:` pattern used for schema metadata (`__schema__:`) and index metadata (`__index_meta__:`).
+
+The trade-off is larger key sizes compared to binary encoding, but the simplicity and debuggability benefits outweigh this for an embedded database.
+
+---
+
+## Why `__index_meta__:{name}` for index metadata persistence?
+
+**Decision:** Store serialized `IndexSchema` objects with `__index_meta__:{name}` keys in the storage engine.
+
+**Reason:** This follows the same pattern as table schema persistence (`__schema__:{table_name}`). On startup, `Catalog.load_indexes_from_engine()` scans all keys with the `__index_meta__:` prefix and reconstructs the in-memory index catalog. This approach:
+1. Reuses the existing storage engine for persistence (no separate metadata store needed)
+2. Is automatically included in WAL and compaction (crash-safe)
+3. Is simple to implement — just serialize/deserialize the IndexSchema struct
+4. Survives engine restarts naturally
+
+---
+
+## Why maintain indexes on INSERT/UPDATE/DELETE instead of rebuilding on restart?
+
+**Decision:** Update index entries synchronously during every data-modifying operation.
+
+**Reason:** There are two approaches to keeping indexes consistent:
+1. **Synchronous maintenance**: Update index entries on every INSERT/UPDATE/DELETE (current approach)
+2. **Rebuild on restart**: Only store index metadata, rebuild physical index entries by scanning all data on startup
+
+The synchronous approach was chosen because:
+- **Startup time**: Rebuilding indexes by scanning all data could be expensive for large datasets
+- **Simplicity**: The maintenance logic is straightforward — insert/delete a key per index per row
+- **Consistency**: Index entries are always in sync with the data, even after crashes (WAL ensures atomicity)
+- **No rebuild step**: No need for a separate index rebuild phase during recovery
+
+The trade-off is increased write amplification — each INSERT/UPDATE/DELETE now writes additional index entries. For a table with N indexes, each write operation generates N additional storage engine writes. This is acceptable for the current use case but should be monitored as the database scales.
+
+---
+
+## Why `IndexSchema` is separate from `TableSchema`?
+
+**Decision:** Store index metadata in a separate `IndexSchema` struct and a separate `HashMap` in the `Catalog`.
+
+**Reason:** Indexes are conceptually separate from table schemas. A table can have zero or more indexes, and indexes can be created/dropped independently of the table structure. Keeping them in separate data structures:
+1. Makes the catalog easier to reason about (tables vs. indexes are distinct concerns)
+2. Allows iterating over all indexes independently (e.g., `load_indexes_from_engine()`)
+3. Avoids modifying the `TableSchema` struct when indexes are added or removed
+4. Matches the mental model of SQL — `CREATE INDEX` is a separate statement from `CREATE TABLE`

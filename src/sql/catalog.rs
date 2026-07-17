@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{engine::{Engine, Value}, error::Result, sql::ast::{self, DataType}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::ast::{self, DataType}, storage_iterator::StorageIterator};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogDataType {
@@ -22,18 +22,16 @@ pub struct TableSchema {
     pub columns: Vec<Column>,
 }
 
-pub struct Catalog {
-    tables: HashMap<String, TableSchema>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSchema {
+    pub name: String,
+    pub table_name: String,
+    pub column_name: String,
 }
 
-impl TableSchema {
-    pub fn column(&self, name: &str) -> Option<&Column> {
-        self.columns.iter().find(|c| c.name == name)
-    }
-
-    pub fn primary_key(&self) -> Option<&Column> {
-        self.columns.iter().find(|c| c.primary_key)
-    }
+pub struct Catalog {
+    pub tables: HashMap<String, TableSchema>,
+    pub indexes: HashMap<String, IndexSchema>,
 }
 
 impl From<ast::DataType> for CatalogDataType {
@@ -49,6 +47,7 @@ impl Catalog {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
+            indexes: HashMap::new(),
         }
     }
 
@@ -66,11 +65,45 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn create_index(
+        &mut self,
+        index: IndexSchema,
+    ) -> Result<()> {
+
+        if self.indexes.contains_key(&index.name) {
+            return Err(DatabaseError::Other(
+                format!(
+                    "index '{}' already exists",
+                    index.name,
+                ),
+            ));
+        }
+
+        self.indexes.insert(
+            index.name.clone(),
+            index,
+        );
+
+        Ok(())
+    }
+
     pub fn table(
         &self,
         name: &str,
     ) -> Option<&TableSchema> {
         self.tables.get(name)
+    }
+
+    pub fn index(
+        &self,
+        name: &str,
+    ) -> Option<&IndexSchema> {
+
+        self.indexes.get(name)
+    }
+
+    pub fn indexes(&self) -> impl Iterator<Item = &IndexSchema> {
+        self.indexes.values()
     }
 
     pub fn exists(
@@ -108,9 +141,65 @@ impl Catalog {
 
         Ok(())
     }
+
+    pub fn indexes_for_table(
+        &self,
+        table_name: &str,
+    ) -> Vec<&IndexSchema> {
+        self.indexes
+            .values()
+            .filter(|index| index.table_name == table_name)
+            .collect()
+    }
+
+    pub fn load_indexes_from_engine(
+        &mut self,
+        engine: &mut Engine,
+    ) -> Result<()> {
+
+        let mut iter = engine.iter()?;
+
+        while let Some(record) = iter.next()? {
+
+            if !record.key.starts_with("__index_meta__:") {
+                continue;
+            }
+
+            let serialized = match record.value {
+
+                Value::Data(data) => data,
+
+                Value::Tombstone => continue,
+            };
+
+            let schema = IndexSchema::deserialize(
+                &serialized,
+            )?;
+
+            // Ignore duplicates during recovery.
+            if self.index(&schema.name).is_none() {
+
+                self.create_index(schema)
+                    .map_err(|e| DatabaseError::Other(format!(
+                        "{:?}",
+                        e,
+                    )))?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl TableSchema {
+
+    pub fn column(&self, name: &str) -> Option<&Column> {
+        self.columns.iter().find(|c| c.name == name)
+    }
+
+    pub fn primary_key(&self) -> Option<&Column> {
+        self.columns.iter().find(|c| c.primary_key)
+    }
 
     pub fn serialize(&self) -> String {
 
@@ -176,5 +265,41 @@ impl TableSchema {
             name: table_name.to_string(),
             columns,
         }
+    }
+}
+
+impl IndexSchema {
+    pub fn serialize(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            self.name,
+            self.table_name,
+            self.column_name,
+        )
+    }
+
+    pub fn deserialize(s: &str) -> Result<Self> {
+        let mut parts = s.split('|');
+
+        let name = parts
+            .next()
+            .ok_or_else(|| DatabaseError::Other("invalid index schema".into()))?
+            .to_string();
+
+        let table_name = parts
+            .next()
+            .ok_or_else(|| DatabaseError::Other("invalid index schema".into()))?
+            .to_string();
+
+        let column_name = parts
+            .next()
+            .ok_or_else(|| DatabaseError::Other("invalid index schema".into()))?
+            .to_string();
+
+        Ok(Self {
+            name,
+            table_name,
+            column_name,
+        })
     }
 }

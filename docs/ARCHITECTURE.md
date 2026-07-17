@@ -13,7 +13,7 @@ src/
 ├── engine.rs           # Core Engine: memtable, flush, compaction, get/put/delete/scan/iter
 ├── engine_iterator.rs  # Wraps UnifiedStorageIterator for Engine.iter()
 ├── memtable_iterator.rs# Iterator over BTreeMap<String, Value>
-├── merge_iterator.rs   # K-way merge of multiple StorageIterators (with dedup)
+├── merge_iterator.rs   # K-way merge of multiple StorageIterators (with dedup) — deprecated
 ├── unified_storage_iterator.rs # Single iterator over memtable + all SSTables
 ├── storage_iterator.rs # StorageIterator trait definition
 ├── sstable.rs          # SSTable read/write, block compression, binary search, bloom filter integration
@@ -29,13 +29,13 @@ src/
 ├── schema.rs           # Schema definitions
 └── sql/
     ├── mod.rs          # SQL module declarations
-    ├── token.rs        # SQL token types (including PRIMARY, KEY)
+    ├── token.rs        # SQL token types (including PRIMARY, KEY, CREATE INDEX, ON)
     ├── lexer.rs        # SQL tokenizer
-    ├── sql_parser.rs   # SQL → AST parser (supports PRIMARY KEY syntax)
-    ├── ast.rs          # SQL AST node types (ColumnDef has primary_key: bool)
-    ├── executor.rs     # SQL statement executor (CREATE, INSERT, SELECT, UPDATE, DELETE)
+    ├── sql_parser.rs   # SQL → AST parser (supports PRIMARY KEY, CREATE INDEX syntax)
+    ├── ast.rs          # SQL AST node types (ColumnDef, CreateIndex, Statement)
+    ├── executor.rs     # SQL statement executor (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, CREATE INDEX)
     ├── expression.rs   # WHERE clause expression evaluator
-    ├── catalog.rs      # Table schema metadata store (Column has primary_key: bool)
+    ├── catalog.rs      # Table schema + index schema metadata store
     ├── row.rs          # Row type with serialization/deserialization
     └── table.rs        # Table helper: storage key generation, primary key handling
 ```
@@ -128,6 +128,18 @@ CREATE TABLE users (
 3. **Schema construction**: Each `ColumnDef` is converted to a `Column` with `primary_key` and `nullable` flags.
 4. **Catalog registration**: Schema is stored in the in-memory catalog and persisted to the storage engine with a `__schema__:` prefix key.
 
+### CREATE INDEX Flow
+
+```sql
+CREATE INDEX idx_users_name ON users (name);
+```
+
+1. **Parser** (`parse_create_index`): After `CREATE` token, if the next token is `INDEX`, it parses: index name, `ON`, table name, `(column_name)`.
+2. **Validation** (`execute_create_index`): Validates the table exists and the column exists in the table schema.
+3. **Metadata persistence**: An `IndexSchema` (name, table_name, column_name) is serialized and stored with a `__index_meta__:{name}` key.
+4. **Catalog registration**: The `IndexSchema` is added to `Catalog.indexes` (in-memory `HashMap<String, IndexSchema>`).
+5. **Physical index build** (`build_index`): Scans every row in the table, constructs an index storage key for each row, and writes it to the engine.
+
 ### Executor Flow (SELECT)
 
 ```
@@ -162,6 +174,7 @@ execute_delete(stmt)
   │   Condition: WHERE clause is `primary_key = <literal>`
   │   → Identifies PK column via `table.schema.primary_key()`
   │   → Direct key lookup via Engine.get()
+  │   → Remove index entries for the old row
   │   → Write Tombstone via Engine.delete()
   │   → Return "1 row deleted"
   │
@@ -171,6 +184,7 @@ execute_delete(stmt)
       → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
         → Collect matching keys
+      → Remove index entries for each matching row
       → Write Tombstone for each matching key via Engine.delete()
       → Return "{n} row(s) deleted"
 ```
@@ -188,7 +202,9 @@ execute_update(stmt)
   │   → Direct key lookup via Engine.get()
   │   → Apply SET assignments to deserialized row
   │   → Rejects attempts to modify the PK column
+  │   → Remove old index entries for the old row
   │   → Re-serialize and write back via Engine.put()
+  │   → Insert new index entries for the updated row
   │   → Return "1 row updated"
   │
   └─ SLOW PATH (Full Table Scan):
@@ -198,9 +214,36 @@ execute_update(stmt)
         → Evaluate WHERE clause via ExpressionEvaluator
         → Apply SET assignments to matching rows
         → Rejects attempts to modify the PK column
+        → Remove old index entries for the old row
         → Re-serialize and write back via Engine.put()
+        → Insert new index entries for the updated row
       → Return "{n} row(s) updated"
 ```
+
+### Index Maintenance
+
+Index entries are maintained on all data-modifying operations:
+
+- **INSERT** (`execute_insert`): After writing the row, calls `insert_index_entries()` which iterates over all indexes for the table and writes a `__index__:{table}:{column}:{value}:{pk}` key for each.
+- **DELETE** (`execute_delete`): Before writing the tombstone, calls `delete_index_entries()` to remove all index entries for the row being deleted.
+- **UPDATE** (`execute_update`): Removes old index entries for the original row (via `delete_index_entries`), then writes the updated row, then inserts new index entries for the updated values (via `insert_index_entries`).
+
+### Index Storage Key Format
+
+```
+__index__:{table_name}:{column_name}:{column_value}:{primary_key_value}
+```
+
+Example: `__index__:users:name:Alice:42`
+
+This format enables:
+- Efficient lookup of all rows matching a given index value via prefix scan (`__index__:users:name:Alice:`)
+- Uniqueness per (table, column, value, pk) combination
+- Easy cleanup on DELETE by regenerating the exact key
+
+### Index Metadata Persistence
+
+Index metadata (`IndexSchema`) is serialized and stored with a `__index_meta__:{name}` key in the storage engine. On startup, `Catalog.load_indexes_from_engine()` scans all `__index_meta__:` prefixed keys and reconstructs the index catalog.
 
 ### Key Data Structures
 
@@ -244,13 +287,32 @@ struct Column {
     primary_key: bool,
     nullable: bool,  // false for PK columns, true for non-PK
 }
+
+// Index schema (catalog)
+struct IndexSchema {
+    name: String,
+    table_name: String,
+    column_name: String,
+}
 ```
 
 ### Storage Key Format
 ```
-"{table_name}:{primary_key_value}"
+{table_name}:{primary_key_value}
 ```
 Example: `"users:42"`, `"products:abc123"`
+
+### Index Storage Key Format
+```
+__index__:{table_name}:{column_name}:{value}:{pk}
+```
+Example: `__index__:users:name:Alice:42`
+
+### Index Metadata Key Format
+```
+__index_meta__:{index_name}
+```
+Example: `__index_meta__:idx_users_name`
 
 ### Row Serialization Format
 ```
@@ -281,9 +343,12 @@ StorageIterator (trait)
 
 ## Current Limitations
 
-- No secondary indexes
 - No transaction support
+- No query planner / index usage in query execution (indexes exist but are not used for lookups yet)
 - CLI uses raw Command interface, not SQL
 - MergeIterator is no longer used (replaced by UnifiedStorageIterator) — should be removed
 - Parser panics on syntax errors instead of returning Result
 - memtable_limit is hardcoded to 1000
+- Block cache size is hardcoded to 64 blocks
+- Primary key flag (`primary_key: bool`) is not persisted in catalog schema serialization (lost on restart)
+- Index entries are not yet used for query execution (SELECT/UPDATE/DELETE still use PK lookup or full table scan)

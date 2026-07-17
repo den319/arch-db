@@ -198,6 +198,49 @@
   - `row_tests.rs`, `table_tests.rs`, `catalog_tests.rs` — updated field usage
 - All 285 tests pass (0 failures)
 
+## Milestone 5: Secondary Index Infrastructure
+
+### 2026-07-14 to 2026-07-16 — Secondary Index Implementation
+- Added `CreateIndex` statement to AST (`src/sql/ast.rs`)
+  - New `CreateIndex` struct: `index_name`, `table_name`, `column_name`
+  - New `Statement::CreateIndex` variant
+  - New `CreateIndex`, `On` token variants in `src/sql/token.rs`
+- Extended SQL parser (`src/sql/sql_parser.rs`):
+  - `parse_create_index()` → parses `CREATE INDEX name ON table (column)`
+  - `parse_statement()` dispatches to `parse_create_index()` when `CREATE` is followed by `INDEX`
+- Added `IndexSchema` to catalog (`src/sql/catalog.rs`):
+  - New struct with `name`, `table_name`, `column_name` fields
+  - `Catalog` gains `indexes: HashMap<String, IndexSchema>`
+  - `create_index()`, `index()`, `indexes()`, `indexes_for_table()` methods
+  - `load_indexes_from_engine()` — scans `__index_meta__:` prefixed keys on startup
+  - `serialize()` / `deserialize()` for persistence
+- Implemented index maintenance in executor (`src/sql/executor.rs`):
+  - `execute_create_index()` — validates table/column, registers metadata, persists to engine, builds physical index
+  - `build_index()` — scans all rows in the table, creates index entries for each
+  - `insert_index_entries()` — called after INSERT, iterates indexes for the table, writes index entries
+  - `delete_index_entries()` — called before DELETE, removes index entries for the deleted row
+  - `make_index_storage_key()` — constructs `__index__:{table}:{column}:{value}:{pk}` key format
+  - `indexes_for_table()` — convenience method wrapping catalog lookup
+- Integrated index maintenance into existing CRUD operations:
+  - `execute_insert()` — calls `insert_index_entries()` after writing the row
+  - `execute_delete()` — calls `delete_index_entries()` before writing tombstone (both fast and slow paths)
+  - `execute_update()` — calls `delete_index_entries()` on old row, then `insert_index_entries()` on updated row (both fast and slow paths)
+- Index test suite (`tests/executor_tests.rs`):
+  - `test_create_index` — basic index creation flow
+  - `test_duplicate_index_name` — rejects duplicate index creation
+  - `test_index_on_nonexistent_table` — rejects index on missing table
+  - `test_index_on_nonexistent_column` — rejects index on missing column
+  - `test_index_entries_created_on_insert` — verifies index entries are written for new rows
+  - `test_index_entries_removed_on_delete` — verifies index entries are cleaned up on delete
+  - `test_index_entries_updated_on_update` — verifies index entries are correctly updated
+  - `test_multiple_indexes_maintained` — verifies multiple indexes on same table work together
+  - `test_duplicate_index_values` — verifies duplicate indexed values create separate entries (per PK)
+  - `test_index_persistence_across_restarts` — verifies index metadata survives engine restart
+  - `test_index_recovery_with_engine_restart_and_insert` — verifies index maintenance works after recovery
+  - `test_index_with_delete_all_scan_path` — verifies index cleanup in slow-path delete
+  - `test_index_with_update_scan_path` — verifies index update in slow-path update
+- All 74 executor tests pass (secondary index feature complete)
+
 ## Known Issues & Technical Debt
 - `MergeIterator` is no longer used directly (replaced by `UnifiedStorageIterator`) — should be removed
 - `engine_iterator.rs` wraps `UnifiedStorageIterator` with minimal logic — could be inlined
@@ -206,3 +249,5 @@
 - No proper error propagation in parser (uses panic! for invalid syntax)
 - memtable_limit is hardcoded to 1000 in Engine::new()
 - Block cache size is hardcoded to 64 blocks
+- Primary key flag is not persisted in catalog schema serialization (lost on restart)
+- Index entries exist but are not yet used for query execution (SELECT/UPDATE/DELETE still use PK lookup or full table scan)
