@@ -16,7 +16,7 @@ pub mod storage_iterator;
 pub mod memtable_iterator;
 pub mod engine_iterator;
 pub mod unified_storage_iterator;
-
+pub mod range_iterator;
 
 
 

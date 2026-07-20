@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arch_db::sql::ast::{CreateIndex, OrderBy, OrderDirection};
 use arch_db::sql::catalog::IndexSchema;
+use arch_db::sql::lexer::Lexer;
+use arch_db::sql::sql_parser::SQLParser;
 use arch_db::{
     engine::{Engine, Value},
     sql::{
@@ -24,6 +26,39 @@ fn make_engine() -> Engine {
     let path = format!("storage/tests/test_executor_{}", id);
     let _ = fs::remove_dir_all(&path);
     Engine::with_storage_path(&path)
+}
+
+fn create_executor() -> Executor<'static> {
+    let catalog = Catalog::new();
+    let engine = make_engine();
+    Executor::new(Box::leak(Box::new(catalog)), Box::leak(Box::new(engine)))
+}
+
+fn execute_sql(executor: &mut Executor, sql: &str) -> QueryResult {
+    let lexer = Lexer::new(sql);
+    let mut parser = SQLParser::new(lexer);
+    let statement = parser.parse_statement();
+    executor.execute(statement)
+}
+
+fn assert_rows_eq(result: QueryResult, expected: Vec<Vec<&str>>) {
+    match result {
+        QueryResult::Rows(rows) => {
+            let expected: Vec<Vec<String>> = expected
+                .into_iter()
+                .map(|row| row.into_iter().map(|s| s.to_string()).collect())
+                .collect();
+            assert_eq!(rows, expected);
+        }
+        other => panic!("Expected Rows, got {:?}", other),
+    }
+}
+
+fn extract_rows(result: &QueryResult) -> &Vec<Vec<String>> {
+    match result {
+        QueryResult::Rows(rows) => rows,
+        other => panic!("Expected Rows, got {:?}", other),
+    }
 }
 
 fn scan_index_keys(engine: &mut Engine) -> Vec<String> {
@@ -1760,8 +1795,8 @@ fn test_delete_multiple_rows() {
         QueryResult::Rows(rows) => {
             assert_eq!(rows.len(), 2);
 
-            assert_eq!(rows[0], vec!["10", "1"]);
-            assert_eq!(rows[1], vec!["20", "2"]);
+            assert_eq!(rows[0], vec!["1", "10"]);
+            assert_eq!(rows[1], vec!["2", "20"]);
         }
 
         _ => panic!("Expected rows"),
@@ -2861,7 +2896,7 @@ fn test_create_index_integer_column() {
 
     assert_eq!(
         entries[0],
-        "__index__:users:age:25:1"
+        "__index__:users:age:00000000000000000025:1"
     );
 }
 
@@ -3052,7 +3087,7 @@ fn test_insert_updates_multiple_indexes() {
     assert_eq!(
         keys,
         vec![
-            "__index__:users:age:25:1",
+            "__index__:users:age:00000000000000000025:1",
             "__index__:users:name:Alice:1",
         ]
     );
@@ -3316,7 +3351,7 @@ fn test_update_updates_multiple_indexes() {
     assert_eq!(
         keys,
         vec![
-            "__index__:users:age:30:1",
+            "__index__:users:age:00000000000000000030:1",
             "__index__:users:name:Bob:1",
         ]
     );
@@ -3480,5 +3515,529 @@ fn test_catalog_recovers_multiple_indexes() {
         recovered_catalog.indexes_for_table("users");
 
     assert_eq!(indexes.len(), 2);
+}
+
+#[test]
+fn test_select_uses_index_multiple_matches() {
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_name ON users(name);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (2,'Bob');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (3,'Alice');",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE name='Alice';",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["1", "Alice"],
+            vec!["3", "Alice"],
+        ],
+    );
+}
+
+#[test]
+fn test_select_index_no_matches() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_name ON users(name);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (2,'Bob');",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE name='Charlie';",
+    );
+
+    assert_rows_eq(result, vec![]);
+}
+
+#[test]
+fn test_select_index_many_duplicates() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_name ON users(name);",
+    );
+
+    for i in 1..=20 {
+
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,name) VALUES ({},'Alice');",
+                i
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE name='Alice';",
+    );
+
+    assert_eq!(
+        extract_rows(&result).len(),
+        20,
+    );
+}
+
+#[test]
+fn test_integer_index_lookup() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (1,20);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (2,30);",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age=30;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["2", "30"],
+        ],
+    );
+}
+
+#[test]
+fn test_update_using_index() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_name ON users(name);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (2,'Bob');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "UPDATE users
+         SET name='Charlie'
+         WHERE name='Alice';",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users
+         WHERE name='Charlie';",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["1", "Charlie"],
+        ],
+    );
+}
+
+#[test]
+fn test_delete_using_index() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_name ON users(name);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (2,'Bob');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "DELETE FROM users
+         WHERE name='Alice';",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["2", "Bob"],
+        ],
+    );
+}
+
+//----------------------------------------------------------
+// RANGE INDEX SCAN TESTS
+//----------------------------------------------------------
+
+#[test]
+fn test_index_scan_greater_than() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (1,10);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (2,20);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (3,25);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (4,30);",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,age) VALUES (5,40);",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age > 20 ORDER BY id;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["3", "25"],
+            vec!["4", "30"],
+            vec!["5", "40"],
+        ],
+    );
+}
+
+#[test]
+fn test_index_scan_greater_than_or_equal() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [
+        (1,10),
+        (2,20),
+        (3,25),
+        (4,30),
+        (5,40),
+    ] {
+
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id,
+                age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age >= 20 ORDER BY id;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["2", "20"],
+            vec!["3", "25"],
+            vec!["4", "30"],
+            vec!["5", "40"],
+        ],
+    );
+}
+
+#[test]
+fn test_index_scan_less_than() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [
+        (1,10),
+        (2,20),
+        (3,25),
+        (4,30),
+        (5,40),
+    ] {
+
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id,
+                age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age < 25 ORDER BY id;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["1", "10"],
+            vec!["2", "20"],
+        ],
+    );
+}
+
+#[test]
+fn test_index_scan_less_than_or_equal() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [
+        (1,10),
+        (2,20),
+        (3,25),
+        (4,30),
+        (5,40),
+    ] {
+
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id,
+                age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age <= 25 ORDER BY id;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["1", "10"],
+            vec!["2", "20"],
+            vec!["3", "25"],
+        ],
+    );
+}
+
+#[test]
+fn test_index_scan_duplicate_boundary() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [
+        (1,20),
+        (2,20),
+        (3,20),
+        (4,25),
+        (5,30),
+    ] {
+
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id,
+                age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT * FROM users WHERE age > 20 ORDER BY id;",
+    );
+
+    assert_rows_eq(
+        result,
+        vec![
+            vec!["4", "25"],
+            vec!["5", "30"],
+        ],
+    );
 }
 

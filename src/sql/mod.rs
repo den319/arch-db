@@ -7,3 +7,4 @@ pub mod catalog;
 pub mod row;
 pub mod table;
 pub mod expression;
+pub mod planner;

@@ -86,6 +86,53 @@ impl Table {
         Some(format!("{}:{}", self.schema.name, key))
     }
 
+    pub fn encode_index_value(
+        value: &RowValue,
+    ) -> String {
+        match value {
+
+            // TODO:
+            // Current integer encoding assumes non-negative values.
+            // Replace with an order-preserving signed integer encoding
+            // when implementing full range index support.
+            
+            RowValue::Integer(v) => {
+                //------------------------------------------------------
+                // Fixed-width encoding.
+                //
+                // This preserves numeric ordering when compared
+                // lexicographically.
+                //------------------------------------------------------
+                format!("{:020}", v)
+            }
+
+            RowValue::Text(s) => s.clone(),
+        }
+    }
+
+    pub fn decode_index_value(
+        encoded: &str,
+        data_type: &DataType,
+    ) -> RowValue {
+
+        match data_type {
+
+            DataType::Int => {
+
+                RowValue::Integer(
+                    encoded.parse().unwrap()
+                )
+            }
+
+            DataType::Text => {
+
+                RowValue::Text(
+                    encoded.to_string()
+                )
+            }
+        }
+    }
+
     pub fn storage_key_from_expr(
         &self,
         expr: &Expr,

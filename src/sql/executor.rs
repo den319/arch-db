@@ -1,4 +1,4 @@
-use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, CatalogDataType, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, planner::IndexLookup, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -160,14 +160,148 @@ impl<'a> Executor<'a> {
         Ok(rows)
     }
 
-    fn matching_rows(
+    fn lookup_index(
+        &mut self,
+        table_name: &str,
+        lookup: &IndexLookup,
+    ) -> Result<Vec<String>> {
+
+        let encoded =
+            Table::encode_index_value(&lookup.value);
+
+        let prefix = format!(
+            "__index__:{}:{}:{}:",
+            table_name,
+            lookup.column,
+            encoded,
+        );
+
+        let mut keys = Vec::new();
+
+        let (start, end) =
+            self.build_index_range(
+                table_name,
+                lookup,
+            );
+
+        let mut iter =
+            self.engine.range_scan(
+                &start,
+                &end,
+            )?;
+
+        while let Some(record) = iter.next()? {
+
+            //------------------------------------------------------
+            // Index key format:
+            //
+            // __index__:users:name:Alice:1
+            //------------------------------------------------------
+
+            if let Some(primary_key) =
+                record.key.rsplit(':').next()
+            {
+                keys.push(primary_key.to_string());
+            }
+        }
+
+        Ok(keys)
+    }
+
+    fn fetch_rows_by_primary_keys(
+        &mut self,
+        table_name: &str,
+        primary_keys: Vec<String>,
+    ) -> Result<Vec<(String, Row)>> {
+
+        let schema = self
+            .catalog
+            .table(table_name)
+            .expect("table should exist")
+            .clone();
+
+        let table = Table::new(schema);
+
+        let mut rows = Vec::new();
+
+        for pk in primary_keys {
+
+            // Determine the primary key type
+            let pk_column = table
+                .schema
+                .primary_key()
+                .expect("table should have a primary key");
+
+            let pk_value = match pk_column.data_type {
+
+                CatalogDataType::Integer => {
+                    RowValue::Integer(
+                        pk.parse().map_err(|_| {
+                            DatabaseError::Other(
+                                format!("Invalid integer primary key '{}'", pk)
+                            )
+                        })?
+                    )
+                }
+
+                CatalogDataType::Text => {
+                    RowValue::Text(pk)
+                }
+            };
+
+            let storage_key = table
+                .storage_key_from_primary_key(&pk_value)
+                .expect("table has a primary key");
+
+            if let Some(Value::Data(data)) =
+                self.engine.get(&storage_key)
+            {
+                rows.push((
+                    storage_key,
+                    Row::deserialize(&data),
+                ));
+            }
+        }
+
+        Ok(rows)
+    }
+
+    fn fetch_matching_rows(
         &mut self,
         table_name: &str,
         where_clause: &Expr,
     ) -> Result<Vec<(String,Row)>> {
 
-        let rows = self.scan_table(table_name)?;
+        let rows = if let Some(lookup) =
+            self.find_usable_index(
+                table_name,
+                where_clause,
+            )
+        {
+            let primary_keys =
+                self.lookup_index(
+                    table_name,
+                    &lookup,
+                )?;
 
+            println!(
+                "[Planner] Using index on {} ({})",
+                table_name,
+                &lookup.column,
+            );
+
+            self.fetch_rows_by_primary_keys(
+                table_name,
+                primary_keys,
+            )?
+        }
+        else {
+            println!(
+                "[Planner] Table scan"
+            );
+            self.scan_table(table_name)?
+        };
+        
         let mut result = Vec::new();
 
         for (key, row) in rows {
@@ -182,6 +316,119 @@ impl<'a> Executor<'a> {
         }
 
         Ok(result)
+    }
+
+    fn build_index_range(
+        &self,
+        table_name: &str,
+        lookup: &IndexLookup,
+    ) -> (String, String) {
+
+        let encoded =
+            Table::encode_index_value(&lookup.value);
+
+        let base = format!(
+            "__index__:{}:{}:",
+            table_name,
+            lookup.column,
+        );
+
+        match lookup.operator {
+
+            //------------------------------------------------------
+            // =
+            //------------------------------------------------------
+
+            BinaryOperator::Equal => {
+
+                let start = format!(
+                    "{}{}:",
+                    base,
+                    encoded,
+                );
+
+                let mut end = start.clone();
+                end.push(char::MAX);
+
+                (start, end)
+            }
+
+            //------------------------------------------------------
+            // >
+            //------------------------------------------------------
+
+            BinaryOperator::GreaterThan => {
+
+                let mut start = format!(
+                    "{}{}:",
+                    base,
+                    encoded,
+                );
+
+                start.push(char::MAX);
+
+                let mut end = base.clone();
+                end.push(char::MAX);
+
+                (start, end)
+            }
+
+            //------------------------------------------------------
+            // >=
+            //------------------------------------------------------
+
+            BinaryOperator::GreaterThanOrEqual => {
+
+                let start = format!(
+                    "{}{}:",
+                    base,
+                    encoded,
+                );
+
+                let mut end = base.clone();
+                end.push(char::MAX);
+
+                (start, end)
+            }
+
+            //------------------------------------------------------
+            // <
+            //------------------------------------------------------
+
+            BinaryOperator::LessThan => {
+
+                let start = base.clone();
+
+                let end = format!(
+                    "{}{}:",
+                    base,
+                    encoded,
+                );
+
+                (start, end)
+            }
+
+            //------------------------------------------------------
+            // <=
+            //------------------------------------------------------
+
+            BinaryOperator::LessThanOrEqual => {
+
+                let start = base.clone();
+
+                let mut end = format!(
+                    "{}{}:",
+                    base,
+                    encoded,
+                );
+
+                end.push(char::MAX);
+
+                (start, end)
+            }
+
+            _ => unreachable!(),
+        }
     }
 
     fn project_row(
@@ -421,6 +668,81 @@ impl<'a> Executor<'a> {
         Ok(())
     }
 
+    fn find_usable_index(
+        &self,
+        table_name: &str,
+        expr: &Expr,
+    ) -> Option<IndexLookup> {
+
+        //------------------------------------------------------
+        // Only support:
+        //
+        // column <op> literal
+        //------------------------------------------------------
+
+        let (column, operator, value) = match expr {
+
+            Expr::Binary {
+                left,
+                op,
+                right,
+            } => {
+
+                match op {
+                    BinaryOperator::Equal
+                    | BinaryOperator::GreaterThan
+                    | BinaryOperator::GreaterThanOrEqual
+                    | BinaryOperator::LessThan
+                    | BinaryOperator::LessThanOrEqual => {}
+
+                    _ => return None,
+                }
+
+                let column = match &**left {
+                    Expr::Identifier(name) => name.clone(),
+                    _ => return None,
+                };
+
+                let value = match &**right {
+
+                    Expr::Number(n) => {
+                        RowValue::Integer(*n)
+                    }
+
+                    Expr::String(s) => {
+                        RowValue::Text(s.clone())
+                    }
+
+                    _ => return None,
+                };
+
+                (column, op.clone(), value)
+            }
+
+            _ => return None,
+        };
+
+        //------------------------------------------------------
+        // Does an index exist?
+        //------------------------------------------------------
+
+        let indexes =
+            self.catalog.indexes_for_table(table_name);
+
+        for index in indexes {
+
+            if index.column_name == column {
+
+                return Some(IndexLookup {
+                    column,
+                    operator,
+                    value,
+                });
+            }
+        }
+
+        None
+    }
 
     pub fn execute_create_table(
         &mut self,
@@ -496,14 +818,17 @@ impl<'a> Executor<'a> {
         primary_key: &RowValue,
     ) -> String {
 
-        let value = column_value.as_storage_string();
+        let value = column_value;
         let pk = primary_key.as_storage_string();
+
+        let encoded =
+            Table::encode_index_value(&value);
 
         format!(
             "__index__:{}:{}:{}:{}",
             table_name,
             column_name,
-            value,
+            encoded,
             pk,
         )
     }
@@ -705,7 +1030,7 @@ impl<'a> Executor<'a> {
 
             Some(expr) => {
 
-                match self.matching_rows(
+                match self.fetch_matching_rows(
                     &stmt.table_name,
                     expr,
                 ) {
@@ -804,48 +1129,11 @@ impl<'a> Executor<'a> {
 
         for row in filtered_rows {
 
-            let mut values = Vec::new();
-
-            for column in &stmt.columns {
-
-                match column {
-
-                    SelectItem::Wildcard => {
-
-                        for (_, value) in &row.values {
-
-                            match value {
-
-                                RowValue::Integer(i) => {
-                                    values.push(i.to_string());
-                                }
-
-                                RowValue::Text(s) => {
-                                    values.push(s.clone());
-                                }
-                            }
-                        }
-                    }
-
-                    SelectItem::Column(name) => {
-
-                        match row.get(name) {
-
-                            Some(RowValue::Integer(i)) => {
-                                values.push(i.to_string());
-                            }
-
-                            Some(RowValue::Text(s)) => {
-                                values.push(s.clone());
-                            }
-
-                            None => {
-                                values.push("NULL".into());
-                            }
-                        }
-                    }
-                }
-            }
+            let values = self.project_row(
+                &row,
+                &stmt.columns,
+                &schema.columns,
+            );
 
             result.push(values);
         }
@@ -901,7 +1189,7 @@ impl<'a> Executor<'a> {
                 }
             };
 
-            let rows = match self.matching_rows(
+            let rows = match self.fetch_matching_rows(
                 &stmt.table_name,
                 &where_clause,
             ) {
@@ -950,7 +1238,7 @@ impl<'a> Executor<'a> {
         // FALLBACK : TABLE SCAN
         //----------------------------------------------------------
 
-        let rows = match self.matching_rows(
+        let rows = match self.fetch_matching_rows(
             &stmt.table_name,
             &where_clause,
         ) {
@@ -1140,7 +1428,7 @@ impl<'a> Executor<'a> {
         // FALLBACK : TABLE SCAN
         //----------------------------------------------------------
 
-        let rows = match self.matching_rows(
+        let rows = match self.fetch_matching_rows(
             &stmt.table_name,
             &where_clause,
         ) {

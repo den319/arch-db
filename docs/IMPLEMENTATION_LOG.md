@@ -241,6 +241,29 @@
   - `test_index_with_update_scan_path` — verifies index update in slow-path update
 - All 74 executor tests pass (secondary index feature complete)
 
+### 2026-07-18 — Index Range Scan Support
+- Added `range_iterator.rs` — prefix range scan iterator for the storage engine (`Engine::range_scan()`)
+- Added `planner.rs` — new module with `IndexLookup` struct (column, operator, value) for representing index-scan plans
+- Refactored index lookup in executor:
+  - Added `find_usable_index()` — examines a WHERE expression and returns an `Option<IndexLookup>` when an appropriate index is found
+  - Added `build_index_range()` — converts an `IndexLookup` into (start, end) key bounds for prefix range scanning
+  - Added `lookup_index()` — uses `range_scan()` to fetch primary keys from the index by key range
+  - Added `fetch_rows_by_primary_keys()` — fetches full rows from the storage engine via primary key list
+  - Replaced `find_matching_rows()` with `fetch_matching_rows()` — unified entry point that chooses between index range scan and full table scan
+- `fetch_matching_rows()` now applies `ExpressionEvaluator` on fetched rows as a post-filter, ensuring correctness even when the index range is broader than the WHERE condition
+- Range scan tests added (`tests/executor_tests.rs`):
+  - `test_index_scan_greater_than` — index scan with `>` operator
+  - `test_index_scan_greater_than_or_equal` — index scan with `>=` operator
+  - `test_index_scan_less_than` — index scan with `<` operator
+  - `test_index_scan_less_than_or_equal` — index scan with `<=` operator
+  - `test_index_scan_duplicate_boundary` — index scan with duplicate boundary values
+- All 85 executor tests pass (secondary index feature with range scan support complete)
+- Updated documentation:
+  - All four markdown files updated to reflect the index range scan implementation
+  - Roadmap Phase 4 items marked as complete
+  - Architecture section updated with new executor flow, planner module, and range scan path
+  - Design Decisions updated with entries for range scan design, `IndexLookup` struct, and `range_iterator.rs` rationale
+
 ## Known Issues & Technical Debt
 - `MergeIterator` is no longer used directly (replaced by `UnifiedStorageIterator`) — should be removed
 - `engine_iterator.rs` wraps `UnifiedStorageIterator` with minimal logic — could be inlined
@@ -250,4 +273,5 @@
 - memtable_limit is hardcoded to 1000 in Engine::new()
 - Block cache size is hardcoded to 64 blocks
 - Primary key flag is not persisted in catalog schema serialization (lost on restart)
-- Index entries exist but are not yet used for query execution (SELECT/UPDATE/DELETE still use PK lookup or full table scan)
+- Index range scans support equality and comparison operators (>, >=, <, <=) but not `!=` or `LIKE`
+- `find_usable_index()` only supports `column <op> literal` patterns — complex boolean expressions with AND/OR are not yet routed through the index planner

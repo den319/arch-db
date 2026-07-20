@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, sstable::SSTableIterator, storage::{Storage, SyncPolicy}, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
+use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, range_iterator::RangeStorageIterator, sstable::SSTableIterator, storage::{Storage, SyncPolicy}, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
 use crate::{
     bloom_filter::BloomFilter,
     cache::CacheKey,
@@ -463,6 +463,43 @@ impl Engine {
         // let merge = MergeIterator::new(iterators, false)?;
 
         UnifiedStorageIterator::new(iterators)
+    }
+
+    pub fn range_scan(
+        &mut self,
+        start: &str,
+        end: &str,
+    ) -> Result<
+        RangeStorageIterator<
+            UnifiedStorageIterator,
+        >,
+    > {
+        let iter = self.iter()?;
+
+        Ok(
+            RangeStorageIterator::new(
+                iter,
+                start.to_string(),
+                end.to_string(),
+            )
+        )
+    }
+
+    pub fn prefix_scan(
+        &mut self,
+        prefix: &str,
+    ) -> Result<
+        RangeStorageIterator<
+            UnifiedStorageIterator,
+        >,
+    > {
+        let mut end = prefix.to_string();
+        end.push(char::MAX);
+
+        self.range_scan(
+            prefix,
+            &end,
+        )
     }
 
     fn replay_wal(&mut self) -> Result<()> {

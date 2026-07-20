@@ -10,10 +10,11 @@ ArchDB is an LSM-tree (Log-Structured Merge-Tree) database engine written in Rus
 src/
 ├── lib.rs              # Module declarations
 ├── main.rs             # CLI entry point (raw Command interface)
-├── engine.rs           # Core Engine: memtable, flush, compaction, get/put/delete/scan/iter
+├── engine.rs           # Core Engine: memtable, flush, compaction, get/put/delete/scan/iter, range_scan
 ├── engine_iterator.rs  # Wraps UnifiedStorageIterator for Engine.iter()
 ├── memtable_iterator.rs# Iterator over BTreeMap<String, Value>
 ├── merge_iterator.rs   # K-way merge of multiple StorageIterators (with dedup) — deprecated
+├── range_iterator.rs   # Prefix range scan iterator (used by Engine.range_scan())
 ├── unified_storage_iterator.rs # Single iterator over memtable + all SSTables
 ├── storage_iterator.rs # StorageIterator trait definition
 ├── sstable.rs          # SSTable read/write, block compression, binary search, bloom filter integration
@@ -36,6 +37,7 @@ src/
     ├── executor.rs     # SQL statement executor (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, CREATE INDEX)
     ├── expression.rs   # WHERE clause expression evaluator
     ├── catalog.rs      # Table schema + index schema metadata store
+    ├── planner.rs      # Query planner: IndexLookup struct for index-scan plans
     ├── row.rs          # Row type with serialization/deserialization
     └── table.rs        # Table helper: storage key generation, primary key handling
 ```
@@ -153,8 +155,18 @@ execute_select(stmt)
   │   → O(log n) — single key lookup
   │   → Deserialize row, project columns, return
   │
-  └─ SLOW PATH (Full Table Scan):
-      Condition: Everything else (no WHERE, non-PK WHERE, range conditions)
+  ├─ INDEX SCAN PATH:
+  │   Condition: WHERE clause matches an indexed column with a supported operator (=, >, >=, <, <=)
+  │   → `find_usable_index()` checks catalog for an index on the WHERE column
+  │   → If found, returns `IndexLookup { column, operator, value }`
+  │   → `build_index_range()` converts `IndexLookup` into (start, end) key bounds
+  │   → `range_scan()` on `__index__:{table}:{column}:{encoded_value}*` prefix
+  │   → `fetch_rows_by_primary_keys()` fetches full rows from storage engine
+  │   → Post-filter with `ExpressionEvaluator` for correctness
+  │   → Return matched rows
+  │
+  └─ FULL TABLE SCAN (fallback):
+      Condition: No usable index found, no WHERE clause, or complex expressions
       → Full scan via Engine.iter() over all data (memtable + all SSTables)
       → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
@@ -172,14 +184,20 @@ execute_delete(stmt)
   │
   ├─ FAST PATH (Primary Key Lookup):
   │   Condition: WHERE clause is `primary_key = <literal>`
-  │   → Identifies PK column via `table.schema.primary_key()`
   │   → Direct key lookup via Engine.get()
   │   → Remove index entries for the old row
   │   → Write Tombstone via Engine.delete()
   │   → Return "1 row deleted"
   │
-  └─ SLOW PATH (Full Table Scan):
-      Condition: Non-PK WHERE or range conditions
+  ├─ INDEX SCAN PATH:
+  │   Condition: WHERE clause matches an indexed column
+  │   → Same index lookup flow as SELECT
+  │   → Remove index entries for each matched row
+  │   → Write Tombstone for each matched key
+  │   → Return "{n} row(s) deleted"
+  │
+  └─ FULL TABLE SCAN (fallback):
+      Condition: No usable index, complex WHERE expressions
       → Full scan via Engine.iter() over all data
       → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
@@ -198,7 +216,6 @@ execute_update(stmt)
   │
   ├─ FAST PATH (Primary Key Lookup):
   │   Condition: WHERE clause is `primary_key = <literal>`
-  │   → Identifies PK column via `table.schema.primary_key()`
   │   → Direct key lookup via Engine.get()
   │   → Apply SET assignments to deserialized row
   │   → Rejects attempts to modify the PK column
@@ -207,8 +224,19 @@ execute_update(stmt)
   │   → Insert new index entries for the updated row
   │   → Return "1 row updated"
   │
-  └─ SLOW PATH (Full Table Scan):
-      Condition: Non-PK WHERE or range conditions
+  ├─ INDEX SCAN PATH:
+  │   Condition: WHERE clause matches an indexed column
+  │   → Same index lookup flow as SELECT
+  │   → For each matched row:
+  │     → Apply SET assignments
+  │     → Reject PK modification
+  │     → Remove old index entries
+  │     → Write updated row
+  │     → Insert new index entries
+  │   → Return "{n} row(s) updated"
+  │
+  └─ FULL TABLE SCAN (fallback):
+      Condition: No usable index, complex WHERE expressions
       → Full scan via Engine.iter() over all data
       → For each row matching the table's key prefix:
         → Evaluate WHERE clause via ExpressionEvaluator
@@ -344,11 +372,12 @@ StorageIterator (trait)
 ## Current Limitations
 
 - No transaction support
-- No query planner / index usage in query execution (indexes exist but are not used for lookups yet)
 - CLI uses raw Command interface, not SQL
 - MergeIterator is no longer used (replaced by UnifiedStorageIterator) — should be removed
 - Parser panics on syntax errors instead of returning Result
 - memtable_limit is hardcoded to 1000
 - Block cache size is hardcoded to 64 blocks
 - Primary key flag (`primary_key: bool`) is not persisted in catalog schema serialization (lost on restart)
-- Index entries are not yet used for query execution (SELECT/UPDATE/DELETE still use PK lookup or full table scan)
+- Index range scans support equality and comparison operators (>, >=, <, <=) but not `!=` or `LIKE`
+- `find_usable_index()` only supports `column <op> literal` patterns — complex boolean expressions with AND/OR are not yet routed through the index planner
+- Cost-based query optimization not yet implemented (always uses index scan if available, falls back to table scan)

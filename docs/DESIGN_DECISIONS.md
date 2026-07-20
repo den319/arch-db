@@ -232,3 +232,56 @@ The trade-off is increased write amplification — each INSERT/UPDATE/DELETE now
 2. Allows iterating over all indexes independently (e.g., `load_indexes_from_engine()`)
 3. Avoids modifying the `TableSchema` struct when indexes are added or removed
 4. Matches the mental model of SQL — `CREATE INDEX` is a separate statement from `CREATE TABLE`
+
+---
+
+## Why `Engine::range_scan()` instead of scanning all index keys and filtering in memory?
+
+**Decision:** Add a dedicated `range_scan(start, end)` method to the storage engine that returns an iterator over keys in the `[start, end)` range. Used by `lookup_index()` to retrieve only the index entries within a specific key range.
+
+**Reason:** Index range scans (e.g., `WHERE age > 25`) need to find all index entries whose value falls within a range. The index key format `__index__:{table}:{column}:{encoded_value}:{pk}` sorts lexicographically, so all entries for a given value range are contiguous. Two approaches were considered:
+
+1. **Prefix scan + in-memory filtering**: Scan all keys with prefix `__index__:users:age:` and filter in the executor. This defeats the purpose of using an index — you'd iterate over all entries even for a selective range.
+
+2. **Range scan**: Compute `(start, end)` key bounds directly from the `IndexLookup`, then call `range_scan(start, end)` which reads only the keys within those bounds. This is the approach used by LevelDB/RocksDB for range queries.
+
+The range scan approach was chosen because:
+- **I/O efficiency**: Only the relevant portion of the index is read
+- **Correctness**: Works with duplicate values — all entries for `age=25` share the same prefix but differ by PK suffix
+- **Generality**: Supports all comparison operators (=, >, >=, <, <=) by adjusting the start/end bounds
+
+The trade-off is that `range_scan()` requires a new `RangeIterator` implementation that filters the unified storage iterator by key range. This adds a small overhead per iteration but is negligible compared to the I/O savings.
+
+---
+
+## Why `IndexLookup` struct instead of passing column/operator/value as separate parameters?
+
+**Decision:** Create a dedicated `IndexLookup` struct (`planner.rs`) with fields `column`, `operator`, `value`.
+
+**Reason:** The index lookup requires three pieces of information (which column, what operator, what value). Passing them as separate parameters works for simple cases, but as the query planner grows more sophisticated, a struct provides:
+
+1. **Extensibility**: New fields (e.g., `cost_estimate`, `index_name`) can be added without changing function signatures
+2. **Encapsulation**: The `build_index_range()` method takes a single `&IndexLookup` parameter rather than three separate references
+3. **Clarity**: The struct name `IndexLookup` clearly communicates its purpose — it represents a decision to use an index for a lookup
+4. **Pattern matching**: The struct can be destructured cleanly in the caller: `IndexLookup { column, value, .. }`
+
+This is a lightweight planner data structure — a starting point for a more sophisticated cost-based optimizer in the future.
+
+---
+
+## Why `RangeIterator` instead of filtering in `UnifiedStorageIterator`?
+
+**Decision:** Implement `RangeIterator` as a separate `StorageIterator` that wraps an inner iterator and skips keys outside the `[start, end)` range.
+
+**Reason:** Two design options were considered:
+
+1. **Add range filtering to `UnifiedStorageIterator`**: This would make the unified iterator responsible for both merging and range filtering, violating the single-responsibility principle. The unified iterator is already complex enough — it merges memtable + all SSTables with deduplication.
+
+2. **Wrapper iterator**: A new `RangeIterator` that wraps any `StorageIterator` and filters keys by range. This is a composable approach — any iterator can be range-filtered, not just the unified iterator.
+
+The wrapper approach was chosen because:
+- **Composability**: `RangeIterator` works with any `StorageIterator`, not just `UnifiedStorageIterator`
+- **Simplicity**: The range filtering logic is isolated and testable
+- **Reusability**: Future features (e.g., index intersection) can use `RangeIterator` as a building block
+
+The `Engine::range_scan(start, end)` method creates a `RangeIterator` wrapping a `UnifiedStorageIterator`, providing a clean public API that hides the implementation details.

@@ -46,8 +46,9 @@
 - [x] Index metadata persistence and recovery across restarts
 
 ### Phase 4 — Query Optimization
-- [ ] Use indexes for query execution — index-scan lookups for WHERE clauses on indexed columns
-- [ ] Query planner — choose index scan vs. table scan based on cost estimation
+- [x] Use indexes for query execution — index-scan lookups for WHERE clauses on indexed columns (supports =, >, >=, <, <=)
+- [x] Index range scan — `build_index_range()` converts `IndexLookup` into key-range bounds for prefix scan
+- [x] Query planner — `IndexLookup` struct (`planner.rs`) determines index vs. table scan based on available indexes
 
 ### Phase 5 — Transactions & Concurrency
 - [ ] Transactions — atomic multi-statement operations
