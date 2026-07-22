@@ -167,6 +167,74 @@ impl SQLParser {
         exprs
     }
 
+    fn parse_aggregate_select_item(
+        &mut self,
+    ) -> SelectItem {
+
+        let function_name = self.parse_identifier();
+
+        //------------------------------------------------------
+        // Normal column?
+        //------------------------------------------------------
+
+        if self.current_token != Token::LeftParen {
+
+            return SelectItem::Column(function_name);
+        }
+
+        //------------------------------------------------------
+        // Aggregate
+        //------------------------------------------------------
+
+        self.expect(Token::LeftParen);
+
+        let function = match function_name
+            .to_uppercase()
+            .as_str()
+        {
+            "COUNT" => AggregateFunction::Count,
+
+            "MIN" => AggregateFunction::Min,
+
+            "MAX" => AggregateFunction::Max,
+
+            "SUM" => AggregateFunction::Sum,
+
+            "AVG" => AggregateFunction::Avg,
+
+            _ => {
+                panic!(
+                    "Unknown aggregate '{}'",
+                    function_name,
+                );
+            }
+        };
+
+        let argument = match function {
+
+            AggregateFunction::Count => {
+
+                self.expect(Token::Star);
+
+                Expr::Wildcard
+            }
+
+            _ => {
+
+                Expr::Identifier(
+                    self.parse_identifier()
+                )
+            }
+        };
+
+        self.expect(Token::RightParen);
+
+        SelectItem::Aggregate {
+            function,
+            argument,
+        }
+    }
+
     fn parse_select_items(&mut self) -> Vec<SelectItem> {
         let mut items = Vec::new();
         let mut wildcard_seen = false;
@@ -182,11 +250,11 @@ impl SQLParser {
                     wildcard_seen = true;
                 }
 
-                Token::Identifier(name) => {
+                Token::Identifier(_) => {
+
                     items.push(
-                        SelectItem::Column(name.clone())
+                        self.parse_aggregate_select_item()
                     );
-                    self.advance();
                 }
 
                 _ => panic!("Expected column name or '*'"),
@@ -432,11 +500,23 @@ impl SQLParser {
 
         let table_name = self.parse_identifier();
 
-        self.expect(Token::LeftParen);
+        //------------------------------------------------------
+        // Column list is optional.
+        //
+        //   INSERT INTO users VALUES (1, 'Alice');
+        //   INSERT INTO users (id, name) VALUES (1, 'Alice');
+        //------------------------------------------------------
 
-        let columns = self.parse_identifier_list();
-
-        self.expect(Token::RightParen);
+        let columns = if self.current_token == Token::LeftParen {
+            self.advance();
+            let cols = self.parse_identifier_list();
+            self.expect(Token::RightParen);
+            cols
+        } else {
+            // Leave empty — will be filled in from schema order
+            // by the executor.
+            Vec::new()
+        };
 
         self.expect(Token::Values);
 
@@ -446,7 +526,7 @@ impl SQLParser {
 
         self.expect(Token::RightParen);
 
-        if columns.len() != values.len() {
+        if !columns.is_empty() && columns.len() != values.len() {
             panic!(
                 "Column count mismatch: expected {}, got {}",
                 columns.len(),

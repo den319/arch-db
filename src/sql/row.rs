@@ -1,6 +1,13 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+)]
 pub enum RowValue {
     Integer(i64),
     Text(String),
@@ -119,6 +126,44 @@ impl RowValue {
         match self {
             RowValue::Integer(i) => i.to_string(),
             RowValue::Text(s) => s.clone(),
+        }
+    }
+
+    pub fn as_integer(
+        &self,
+    ) -> Option<i64> {
+
+        match self {
+
+            RowValue::Integer(value) => Some(*value),
+
+            RowValue::Text(_) => {
+                None
+            },
+            
+            _ => None,
+        }
+    }
+}
+
+
+
+impl fmt::Display for RowValue {
+
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+
+        match self {
+
+            RowValue::Integer(value) => {
+                return write!(f, "{}", value);
+            }
+
+            RowValue::Text(value) => {
+                return write!(f, "{}", value);
+            }
         }
     }
 }

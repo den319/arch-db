@@ -4041,3 +4041,550 @@ fn test_index_scan_duplicate_boundary() {
     );
 }
 
+// =============================================================
+// AGGREGATE FUNCTION TESTS
+// =============================================================
+
+// -------------------------------------------------------------
+// COUNT
+// -------------------------------------------------------------
+
+#[test]
+fn test_count_all_rows() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT,
+            age INT
+        );",
+    );
+
+    for i in 1..=5 {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,name,age) VALUES ({},'User{}',{});",
+                i, i, i * 10,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT COUNT(*) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["5"]]);
+}
+
+#[test]
+fn test_count_where() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT,
+            age INT
+        );",
+    );
+
+    for i in 1..=5 {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,name,age) VALUES ({},'User{}',{});",
+                i, i, i * 10,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT COUNT(*) FROM users WHERE age > 20;",
+    );
+
+    assert_rows_eq(result, vec![vec!["3"]]);
+}
+
+#[test]
+fn test_count_empty_table() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT,
+            age INT
+        );",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT COUNT(*) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["0"]]);
+}
+
+// -------------------------------------------------------------
+// MIN
+// -------------------------------------------------------------
+
+#[test]
+fn test_min_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 50), (2, 10), (3, 30), (4, 20), (5, 40)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MIN(age) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["10"]]);
+}
+
+#[test]
+fn test_min_text() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    for (id, name) in [(1, "Charlie"), (2, "Alice"), (3, "Bob")] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,name) VALUES ({},'{}');",
+                id, name,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MIN(name) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["Alice"]]);
+}
+
+#[test]
+fn test_min_with_index() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [(1, 50), (2, 10), (3, 30), (4, 20), (5, 40)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MIN(age) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["10"]]);
+}
+
+// -------------------------------------------------------------
+// MAX
+// -------------------------------------------------------------
+
+#[test]
+fn test_max_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 50), (2, 10), (3, 30), (4, 20), (5, 40)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MAX(age) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["50"]]);
+}
+
+#[test]
+fn test_max_text() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    for (id, name) in [(1, "Alice"), (2, "Charlie"), (3, "Bob")] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,name) VALUES ({},'{}');",
+                id, name,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MAX(name) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["Charlie"]]);
+}
+
+#[test]
+fn test_max_with_index() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "CREATE INDEX idx_age ON users(age);",
+    );
+
+    for (id, age) in [(1, 50), (2, 10), (3, 30), (4, 20), (5, 40)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MAX(age) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["50"]]);
+}
+
+// -------------------------------------------------------------
+// SUM
+// -------------------------------------------------------------
+
+#[test]
+fn test_sum_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT SUM(age) FROM users;",
+    );
+
+    assert_rows_eq(result, vec![vec!["150"]]);
+}
+
+#[test]
+fn test_sum_where() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT SUM(age) FROM users WHERE age > 20;",
+    );
+
+    assert_rows_eq(result, vec![vec!["120"]]);
+}
+
+#[test]
+fn test_sum_text_error() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT SUM(name) FROM users;",
+    );
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert!(msg.contains("INTEGER"), "Expected INTEGER error, got: {}", msg);
+        }
+        other => panic!("Expected Message, got {:?}", other),
+    }
+}
+
+// -------------------------------------------------------------
+// AVG
+// -------------------------------------------------------------
+
+#[test]
+fn test_avg_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT AVG(age) FROM users;",
+    );
+
+    // (10 + 20 + 30 + 40 + 50) / 5 = 30
+    assert_rows_eq(result, vec![vec!["30"]]);
+}
+
+#[test]
+fn test_avg_where() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    for (id, age) in [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)] {
+        execute_sql(
+            &mut executor,
+            &format!(
+                "INSERT INTO users (id,age) VALUES ({},{});",
+                id, age,
+            ),
+        );
+    }
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT AVG(age) FROM users WHERE age > 20;",
+    );
+
+    // (30 + 40 + 50) / 3 = 40
+    assert_rows_eq(result, vec![vec!["40"]]);
+}
+
+#[test]
+fn test_avg_text_error() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO users (id,name) VALUES (1,'Alice');",
+    );
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT AVG(name) FROM users;",
+    );
+
+    match result {
+        QueryResult::Message(msg) => {
+            assert!(msg.contains("INTEGER"), "Expected INTEGER error, got: {}", msg);
+        }
+        other => panic!("Expected Message, got {:?}", other),
+    }
+}
+
+// -------------------------------------------------------------
+// EMPTY TABLE (all aggregates)
+// -------------------------------------------------------------
+
+#[test]
+fn test_aggregate_empty_table() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    // COUNT(*) on empty table
+    let result = execute_sql(
+        &mut executor,
+        "SELECT COUNT(*) FROM users;",
+    );
+    assert_rows_eq(result, vec![vec!["0"]]);
+
+    // MIN on empty table
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MIN(age) FROM users;",
+    );
+    assert_rows_eq(result, vec![]);
+
+    // MAX on empty table
+    let result = execute_sql(
+        &mut executor,
+        "SELECT MAX(age) FROM users;",
+    );
+    assert_rows_eq(result, vec![]);
+
+    // SUM on empty table
+    let result = execute_sql(
+        &mut executor,
+        "SELECT SUM(age) FROM users;",
+    );
+    assert_rows_eq(result, vec![vec!["0"]]);
+
+    // AVG on empty table
+    let result = execute_sql(
+        &mut executor,
+        "SELECT AVG(age) FROM users;",
+    );
+    assert_rows_eq(result, vec![vec!["0"]]);
+}
+

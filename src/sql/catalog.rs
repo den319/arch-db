@@ -216,7 +216,9 @@ impl TableSchema {
                     CatalogDataType::Text => "TEXT",
                 };
 
-                format!("{}:{}", column.name, ty)
+                let pk_flag = if column.primary_key { "PK" } else { "" };
+
+                format!("{}:{}:{}", column.name, ty, pk_flag)
 
             })
             .collect::<Vec<_>>()
@@ -239,9 +241,16 @@ impl TableSchema {
 
             for column in columns_part.split(',') {
 
-                let (name, ty) = column
-                    .split_once(':')
-                    .expect("Invalid column definition");
+                let parts: Vec<&str> = column.split(':').collect();
+
+                let name = parts[0];
+
+                let ty = parts[1];
+
+                // If the third segment exists and equals "PK",
+                // this column is a primary key. Otherwise it's
+                // a regular (non-PK, non-nullable) column.
+                let primary_key = parts.get(2).copied() == Some("PK");
 
                 let data_type = match ty {
 
@@ -256,7 +265,7 @@ impl TableSchema {
                     name: name.to_string(),
                     data_type,
                     nullable: false,
-                    primary_key: false
+                    primary_key,
                 });
             }
         }
@@ -270,12 +279,12 @@ impl TableSchema {
 
 impl IndexSchema {
     pub fn serialize(&self) -> String {
-        format!(
+        return format!(
             "{}|{}|{}",
             self.name,
             self.table_name,
             self.column_name,
-        )
+        );
     }
 
     pub fn deserialize(s: &str) -> Result<Self> {

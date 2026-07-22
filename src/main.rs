@@ -89,7 +89,17 @@ fn main() {
 
             let result = executor.execute(statement);
 
-            println!("{:#?}", result);
+            match result {
+                arch_db::sql::executor::QueryResult::None => {}
+                arch_db::sql::executor::QueryResult::Message(msg) => {
+                    println!("{}", msg);
+                }
+                arch_db::sql::executor::QueryResult::Rows(rows) => {
+                    for row in rows {
+                        println!("{}", row.join(" | "));
+                    }
+                }
+            }
 
             continue;
         }

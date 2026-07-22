@@ -52,6 +52,8 @@ pub struct Select {
     pub table_name: String,
     pub where_clause: Option<Expr>,
 
+    pub group_by: Option<Vec<String>>,
+
     pub order_by: Option<OrderBy>,
 
     pub limit: Option<usize>,
@@ -79,12 +81,29 @@ pub struct Assignment {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectItem {
     Wildcard,
+
     Column(String),
+
+    Aggregate {
+        function: AggregateFunction,
+        argument: Expr,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AggregateFunction {
+    Count,
+    Min,
+    Max,
+    Sum,
+    Avg,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Identifier(String),
+    
+    Wildcard,
 
     Number(i64),
 

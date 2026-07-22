@@ -14,13 +14,14 @@ fn parser_dispatches_select() {
 }
 
 #[test]
-#[should_panic]
-fn parser_dispatches_insert() {
+fn parser_dispatches_insert_without_column_list() {
     let lexer = Lexer::new("INSERT INTO users VALUES ('john')");
 
     let mut parser = Parser::new(lexer);
 
-    parser.parse_statement();
+    let stmt = parser.parse_statement();
+
+    assert!(matches!(stmt, Statement::Insert(_)));
 }
 
 #[test]

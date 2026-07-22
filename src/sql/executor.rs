@@ -1,4 +1,4 @@
-use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, CatalogDataType, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, planner::IndexLookup, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
+use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{AggregateFunction, BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, CatalogDataType, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, planner::IndexLookup, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
 pub enum QueryResult {
@@ -482,6 +482,11 @@ impl<'a> Executor<'a> {
                         }
                     }
                 }
+
+                SelectItem::Aggregate { .. } => {
+                    // Aggregates are handled in execute_aggregate()
+                    // before project_row() is ever called.
+                }
             }
         }
 
@@ -824,13 +829,404 @@ impl<'a> Executor<'a> {
         let encoded =
             Table::encode_index_value(&value);
 
-        format!(
+        return format!(
             "__index__:{}:{}:{}:{}",
             table_name,
             column_name,
             encoded,
             pk,
-        )
+        );
+    }
+
+    fn aggregate_rows(
+        &mut self,
+        stmt: &Select,
+    ) -> Result<Vec<(String, Row)>> {
+
+        match &stmt.where_clause {
+
+            Some(expr) => {
+
+                self.fetch_matching_rows(
+                    &stmt.table_name,
+                    expr,
+                )
+            }
+
+            None => {
+
+                self.scan_table(
+                    &stmt.table_name,
+                )
+            }
+        }
+    }
+
+    fn aggregate_column_value<'b>(
+        &self,
+        row: &'b Row,
+        column: &str,
+    ) -> Result<&'b RowValue> {
+
+        row.get(column).ok_or_else(|| {
+            DatabaseError::Other(format!(
+                "unknown column '{}'",
+                column,
+            ))
+        })
+    }
+
+    fn execute_aggregate(
+        &mut self,
+        stmt: &Select,
+    ) -> QueryResult {
+
+        let aggregate = match &stmt.columns[0] {
+
+            SelectItem::Aggregate {
+                function,
+                argument,
+            } => (function, argument),
+
+            _ => unreachable!(),
+        };
+
+        let column_name = match aggregate.1 {
+
+            Expr::Identifier(name) => Some(name.as_str()),
+
+            Expr::Wildcard => None,
+
+            _ => {
+                return QueryResult::Message(
+                    "Invalid aggregate argument".into(),
+                );
+            }
+        };
+
+        match aggregate.0 {
+
+            AggregateFunction::Count => {
+
+                //--------------------------------------------------
+                // COUNT(*)
+                //--------------------------------------------------
+
+                let rows = match self.aggregate_rows(stmt) {
+
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err,
+                        ));
+                    }
+                };
+                let count = rows.len();
+
+                QueryResult::Rows(
+                    vec![
+                        vec![
+                            count.to_string(),
+                        ],
+                    ],
+                )
+            }
+
+            AggregateFunction::Min => {
+
+                let rows = match self.aggregate_rows(stmt) {
+
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err,
+                        ));
+                    }
+                };
+
+                let column = column_name.expect(
+                    "MIN requires a column",
+                );
+
+                let mut minimum: Option<RowValue> = None;
+
+                for (_, row) in rows {
+
+                    let value = match self.aggregate_column_value(
+                        &row,
+                        column,
+                    ) {
+                        Ok(value) => value,
+
+                        Err(err) => {
+                            return QueryResult::Message(
+                                format!("Error: {}", err),
+                            );
+                        }
+                    };
+
+                    if minimum
+                        .as_ref()
+                        .is_none_or(|current| value < current)
+                    {
+                        minimum = Some(value.clone());
+                    }
+                }
+
+                QueryResult::Rows(
+                    match minimum {
+
+                        Some(value) => {
+                            vec![
+                                vec![value.to_string()],
+                            ]
+                        }
+
+                        None => vec![],
+                    }
+                )
+            }
+
+            AggregateFunction::Max => {
+
+                let rows = match self.aggregate_rows(stmt) {
+
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return QueryResult::Message(format!(
+                            "Error: {}",
+                            err,
+                        ));
+                    }
+                };
+
+                let column = match column_name {
+
+                    Some(column) => column,
+
+                    None => {
+                        return QueryResult::Message(
+                            "MAX expects a column".into(),
+                        );
+                    }
+                };
+
+                let mut maximum: Option<RowValue> = None;
+
+                for (_, row) in rows {
+
+                    let value = match self.aggregate_column_value(
+                        &row,
+                        column,
+                    ) {
+
+                        Ok(value) => value,
+
+                        Err(err) => {
+                            return QueryResult::Message(format!(
+                                "Error: {}",
+                                err,
+                            ));
+                        }
+                    };
+
+                    match &maximum {
+
+                        None => {
+                            maximum = Some(value.clone());
+                        }
+
+                        Some(current) => {
+
+                            if value > current {
+                                maximum = Some(value.clone());
+                            }
+                        }
+                    }
+                }
+
+                match maximum {
+
+                    Some(value) => {
+
+                        QueryResult::Rows(
+                            vec![
+                                vec![
+                                    value.to_string(),
+                                ],
+                            ],
+                        )
+                    }
+
+                    None => {
+
+                        QueryResult::Rows(vec![])
+                    }
+                }
+            }
+
+            AggregateFunction::Sum => {
+
+                let rows = match self.aggregate_rows(stmt) {
+
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return QueryResult::Message(
+                            format!("Error: {}", err),
+                        );
+                    }
+                };
+
+                let column = match column_name {
+
+                    Some(column) => column,
+
+                    None => {
+                        return QueryResult::Message(
+                            "SUM expects a column".into(),
+                        );
+                    }
+                };
+
+                let mut total = 0_i64;
+
+                for (_, row) in rows {
+
+                    let value = match self.aggregate_column_value(
+                        &row,
+                        column,
+                    ) {
+
+                        Ok(value) => value,
+
+                        Err(err) => {
+                            return QueryResult::Message(
+                                format!("Error: {}", err),
+                            );
+                        }
+                    };
+
+                    match value.as_integer() {
+
+                        Some(number) => {
+                            total += number;
+                        }
+
+                        None => {
+                            return QueryResult::Message(
+                                format!(
+                                    "SUM only supports INTEGER columns"
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                QueryResult::Rows(
+                    vec![
+                        vec![
+                            total.to_string(),
+                        ],
+                    ],
+                )
+            }
+
+            AggregateFunction::Avg => {
+
+                let rows = match self.aggregate_rows(stmt) {
+
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return QueryResult::Message(
+                            format!("Error: {}", err),
+                        );
+                    }
+                };
+
+                let column = match column_name {
+
+                    Some(column) => column,
+
+                    None => {
+                        return QueryResult::Message(
+                            "AVG expects a column".into(),
+                        );
+                    }
+                };
+
+                let mut total = 0_i64;
+                let mut count = 0_i64;
+
+                for (_, row) in rows {
+
+                    let value = match self.aggregate_column_value(
+                        &row,
+                        column,
+                    ) {
+
+                        Ok(value) => value,
+
+                        Err(err) => {
+                            return QueryResult::Message(
+                                format!("Error: {}", err),
+                            );
+                        }
+                    };
+
+                    match value.as_integer() {
+
+                        Some(number) => {
+
+                            total += number;
+                            count += 1;
+                        }
+
+                        None => {
+
+                            return QueryResult::Message(
+                                "AVG only supports INTEGER columns".into(),
+                            );
+                        }
+                    }
+                }
+
+                //------------------------------------------------------
+                // Empty table
+                //------------------------------------------------------
+
+                if count == 0 {
+
+                    return QueryResult::Rows(
+                        vec![
+                            vec!["0".into()],
+                        ],
+                    );
+                }
+
+                let average = total / count;
+
+                QueryResult::Rows(
+                    vec![
+                        vec![
+                            average.to_string(),
+                        ],
+                    ],
+                )
+            }
+
+            _ => {
+                QueryResult::Message(
+                    "Aggregate not implemented".into(),
+                )
+            }
+        }
     }
 
     pub fn execute_create_index(
@@ -930,14 +1326,33 @@ impl<'a> Executor<'a> {
 
         let table = Table::new(schema.clone());
 
+        //------------------------------------------------------
+        // If no column list was given, infer columns from
+        // the schema order.
+        //------------------------------------------------------
+
+        let columns = if stmt.columns.is_empty() {
+            schema.columns.iter().map(|c| c.name.clone()).collect()
+        } else {
+            stmt.columns
+        };
+
         let mut values = Vec::new();
 
         for expr in stmt.values {
             values.push(self.expr_to_value(expr)?);
         }
 
+        if columns.len() != values.len() {
+            return Err(DatabaseError::Other(format!(
+                "column count mismatch: expected {} values, got {}",
+                columns.len(),
+                values.len(),
+            )));
+        }
+
         let row = Row::from_columns(
-            stmt.columns,
+            columns,
             values,
         )
         .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
@@ -980,6 +1395,19 @@ impl<'a> Executor<'a> {
                 ));
             }
         };
+
+        //----------------------------------------------------------
+        // AGGREGATE QUERY
+        //----------------------------------------------------------
+
+        if stmt.columns.len() == 1 {
+
+            if let SelectItem::Aggregate { .. } =
+                &stmt.columns[0]
+            {
+                return self.execute_aggregate(&stmt);
+            }
+        }
 
         let table = Table::new(schema.clone());
 
