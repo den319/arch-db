@@ -1170,3 +1170,147 @@ fn test_parse_create_index_missing_on() {
 
     parser.parse_statement();
 }
+
+// =============================================================
+// GROUP BY PARSER TESTS
+// =============================================================
+
+#[test]
+fn test_parse_group_by_single() {
+
+    let lexer = Lexer::new(
+        "SELECT department, COUNT(*)
+         FROM employees
+         GROUP BY department;",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::Select(select) => {
+            assert_eq!(select.table_name, "employees");
+            assert_eq!(select.columns.len(), 2);
+
+            assert_eq!(
+                select.group_by,
+                Some(vec!["department".into()]),
+            );
+        }
+
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_group_by_multiple() {
+
+    let lexer = Lexer::new(
+        "SELECT department, city, COUNT(*)
+         FROM employees
+         GROUP BY department, city;",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::Select(select) => {
+            assert_eq!(
+                select.group_by,
+                Some(vec!["department".into(), "city".into()]),
+            );
+        }
+
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_where_group_by() {
+
+    let lexer = Lexer::new(
+        "SELECT department, COUNT(*)
+         FROM employees
+         WHERE salary > 1000
+         GROUP BY department;",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::Select(select) => {
+            assert!(select.where_clause.is_some());
+
+            assert_eq!(
+                select.group_by,
+                Some(vec!["department".into()]),
+            );
+        }
+
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_group_by_order_by() {
+
+    let lexer = Lexer::new(
+        "SELECT department, COUNT(*)
+         FROM employees
+         GROUP BY department
+         ORDER BY department;",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::Select(select) => {
+            assert!(select.order_by.is_some());
+
+            assert_eq!(
+                select.group_by,
+                Some(vec!["department".into()]),
+            );
+        }
+
+        _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_group_by_order_by_limit() {
+
+    let lexer = Lexer::new(
+        "SELECT department, COUNT(*)
+         FROM employees
+         GROUP BY department
+         ORDER BY department
+         LIMIT 5;",
+    );
+
+    let mut parser = Parser::new(lexer);
+
+    let stmt = parser.parse_statement();
+
+    match stmt {
+        Statement::Select(select) => {
+            assert!(select.order_by.is_some());
+
+            assert_eq!(select.limit, Some(5));
+
+            assert_eq!(
+                select.group_by,
+                Some(vec!["department".into()]),
+            );
+        }
+
+        _ => panic!("Expected SELECT"),
+    }
+}

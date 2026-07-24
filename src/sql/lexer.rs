@@ -168,6 +168,7 @@ impl Lexer {
             "PRIMARY" => Token::Primary,
             "KEY" => Token::Key,
 
+            "GROUP" => Token::Group,
 
             _ => Token::Identifier(identifier.to_string()),
         }

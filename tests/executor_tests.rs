@@ -298,6 +298,8 @@ fn test_select_by_integer_primary_key() {
         table_name: "users".into(),
         limit: None,
         order_by: None,
+        group_by: None,
+
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
@@ -345,6 +347,8 @@ fn test_select_by_text_primary_key() {
         table_name: "users".into(),
         limit: None,
         order_by: None,
+        group_by: None,
+
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("username".into())),
             op: BinaryOperator::Equal,
@@ -370,6 +374,8 @@ fn test_select_missing_table() {
         table_name: "users".into(),
         limit: None,
         order_by: None,
+        group_by: None,
+
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
@@ -380,6 +386,8 @@ fn test_select_missing_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         limit: None,
+        group_by: None,
+
         order_by: None,
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
@@ -415,6 +423,8 @@ fn test_select_missing_row() {
         table_name: "users".into(),
         limit: None,
         order_by: None,
+        group_by: None,
+
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
             op: BinaryOperator::Equal,
@@ -445,6 +455,7 @@ fn test_select_without_where_clause() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -472,6 +483,8 @@ fn test_select_with_invalid_where_clause() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         limit: None,
+        group_by: None,
+
         order_by: None,
         where_clause: Some(Expr::Identifier("id".into())),
     }));
@@ -906,6 +919,7 @@ fn test_select_all_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -945,6 +959,7 @@ fn test_select_all_empty_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -984,6 +999,7 @@ fn test_select_all_single_row() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1036,6 +1052,7 @@ fn test_select_all_multiple_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1096,6 +1113,7 @@ fn test_select_all_skips_deleted_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1151,6 +1169,7 @@ fn test_select_all_after_update() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1219,6 +1238,7 @@ fn test_select_all_after_multiple_updates() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1264,6 +1284,7 @@ fn test_select_all_after_flush() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1330,6 +1351,7 @@ fn test_select_all_only_requested_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1388,6 +1410,7 @@ fn test_select_all_from_memtable_and_sstable() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1432,6 +1455,8 @@ fn test_select_specific_column_by_primary_key() {
         columns: vec![SelectItem::Column("name".into())],
         table_name: "users".into(),
         limit: None,
+        group_by: None,
+
         order_by: None,
         where_clause: Some(Expr::Binary {
             left: Box::new(Expr::Identifier("id".into())),
@@ -1488,6 +1513,7 @@ fn test_select_all_rows_without_where() {
         table_name: "users".into(),
 
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1548,6 +1574,7 @@ fn test_select_with_non_primary_key_where() {
         columns: vec![SelectItem::Wildcard],
         limit: None,
         order_by: None,
+        group_by: None,
 
         table_name: "users".into(),
 
@@ -1610,6 +1637,7 @@ fn test_select_after_flush() {
         table_name: "users".into(),
 
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1664,6 +1692,7 @@ fn test_delete_by_primary_key() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1730,6 +1759,7 @@ fn test_delete_with_non_primary_key_where() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1787,6 +1817,7 @@ fn test_delete_multiple_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1839,6 +1870,7 @@ fn test_delete_no_matching_rows() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1896,6 +1928,7 @@ fn test_delete_after_flush() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -1964,6 +1997,7 @@ fn test_delete_from_memtable_and_sstable() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         limit: None,
         order_by: None,
     }));
@@ -2028,6 +2062,7 @@ fn test_delete_comparison_operators() {
             columns: vec![SelectItem::Wildcard],
             table_name: "users".into(),
             where_clause: None,
+            group_by: None,
             limit: None,
             order_by: None,
         }));
@@ -2074,6 +2109,7 @@ fn test_select_limit() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: None,
         limit: Some(2),
     }));
@@ -2118,6 +2154,7 @@ fn test_select_limit_zero() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: None,
         limit: Some(0),
     }));
@@ -2159,6 +2196,7 @@ fn test_select_limit_larger_than_table() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: None,
         limit: Some(100),
     }));
@@ -2201,6 +2239,7 @@ fn test_select_order_by_ascending() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: Some(OrderBy {
             column: "id".into(),
             direction: OrderDirection::Asc,
@@ -2247,6 +2286,7 @@ fn test_select_order_by_descending() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: Some(OrderBy {
             column: "id".into(),
             direction: OrderDirection::Desc,
@@ -2302,6 +2342,7 @@ fn test_select_order_by_text() {
         columns: vec![SelectItem::Column("name".into())],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: Some(OrderBy {
             column: "name".into(),
             direction: OrderDirection::Asc,
@@ -2352,6 +2393,7 @@ fn test_select_where_order_by() {
             op: BinaryOperator::GreaterThanOrEqual,
             right: Box::new(Expr::Number(2)),
         }),
+        group_by: None,
         order_by: Some(OrderBy {
             column: "id".into(),
             direction: OrderDirection::Desc,
@@ -2398,6 +2440,7 @@ fn test_select_order_by_limit() {
         columns: vec![SelectItem::Wildcard],
         table_name: "users".into(),
         where_clause: None,
+        group_by: None,
         order_by: Some(OrderBy {
             column: "id".into(),
             direction: OrderDirection::Desc,
@@ -2448,6 +2491,7 @@ fn test_select_where_order_by_limit() {
             op: BinaryOperator::GreaterThan,
             right: Box::new(Expr::Number(1)),
         }),
+        group_by: None,
         order_by: Some(OrderBy {
             column: "id".into(),
             direction: OrderDirection::Asc,
@@ -4586,5 +4630,421 @@ fn test_aggregate_empty_table() {
         "SELECT AVG(age) FROM users;",
     );
     assert_rows_eq(result, vec![vec!["0"]]);
+}
+
+// =============================================================
+// BUILD GROUPS TESTS
+// =============================================================
+
+use std::collections::HashMap;
+
+fn make_row(values: Vec<(&str, RowValue)>) -> Row {
+    let mut row = Row::new();
+    for (col, val) in values {
+        row.insert(col, val);
+    }
+    row
+}
+
+#[test]
+fn test_build_groups_single_group() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (1,'Engineering','Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (2,'Engineering','Bob');",
+    );
+
+    let rows = executor.scan_table("employees").unwrap();
+
+    let groups = executor
+        .build_groups(rows, &vec!["department".into()])
+        .unwrap();
+
+    assert_eq!(groups.len(), 1);
+
+    assert_eq!(
+        groups.values().next().unwrap().len(),
+        2,
+    );
+}
+
+#[test]
+fn test_build_groups_multiple_groups() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            name TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (1,'Engineering','Alice');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (2,'Sales','Bob');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (3,'Engineering','Charlie');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,name) VALUES (4,'HR','David');",
+    );
+
+    let rows = executor.scan_table("employees").unwrap();
+
+    let groups = executor
+        .build_groups(rows, &vec!["department".into()])
+        .unwrap();
+
+    assert_eq!(groups.len(), 3);
+
+    // Engineering -> 2, Sales -> 1, HR -> 1
+    for (key, group_rows) in &groups {
+        let dept = match &key[0] {
+            RowValue::Text(s) => s.as_str(),
+            _ => panic!("expected text key"),
+        };
+        match dept {
+            "Engineering" => assert_eq!(group_rows.len(), 2),
+            "Sales" => assert_eq!(group_rows.len(), 1),
+            "HR" => assert_eq!(group_rows.len(), 1),
+            other => panic!("unexpected department: {}", other),
+        }
+    }
+}
+
+#[test]
+fn test_build_groups_multiple_columns() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            city TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,city) VALUES (1,'Engineering','London');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,city) VALUES (2,'Engineering','Paris');",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department,city) VALUES (3,'Engineering','London');",
+    );
+
+    let rows = executor.scan_table("employees").unwrap();
+
+    let groups = executor
+        .build_groups(rows, &vec!["department".into(), "city".into()])
+        .unwrap();
+
+    assert_eq!(groups.len(), 2);
+
+    for (key, group_rows) in &groups {
+        let dept = match &key[0] {
+            RowValue::Text(s) => s.as_str(),
+            _ => panic!("expected text key"),
+        };
+        let city = match &key[1] {
+            RowValue::Text(s) => s.as_str(),
+            _ => panic!("expected text key"),
+        };
+        match (dept, city) {
+            ("Engineering", "London") => assert_eq!(group_rows.len(), 2),
+            ("Engineering", "Paris") => assert_eq!(group_rows.len(), 1),
+            other => panic!("unexpected group: {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn test_build_groups_unknown_column() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT
+        );",
+    );
+
+    execute_sql(
+        &mut executor,
+        "INSERT INTO employees (id,department) VALUES (1,'Engineering');",
+    );
+
+    let rows = executor.scan_table("employees").unwrap();
+
+    let result = executor
+        .build_groups(rows, &vec!["salary".into()]);
+
+    assert!(result.is_err());
+}
+
+// =============================================================
+// GROUP BY + MIN / MAX TESTS
+// =============================================================
+
+fn assert_rows_eq_sorted(result: QueryResult, expected: Vec<Vec<&str>>) {
+    let mut actual = match result {
+        QueryResult::Rows(rows) => rows,
+        other => panic!("Expected Rows, got {:?}", other),
+    };
+    actual.sort();
+
+    let mut expected: Vec<Vec<String>> = expected
+        .into_iter()
+        .map(|row| row.into_iter().map(|s| s.to_string()).collect())
+        .collect();
+    expected.sort();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_group_by_min_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    // Insert values with some duplicate ages.
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (1,25);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (2,10);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (3,40);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (4,50);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (5,40);");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT age, MIN(age) FROM users GROUP BY age;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["10", "10"],
+            vec!["25", "25"],
+            vec!["40", "40"],
+            vec!["50", "50"],
+        ],
+    );
+}
+
+#[test]
+fn test_group_by_max_integer() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE users (
+            id INT PRIMARY KEY,
+            age INT
+        );",
+    );
+
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (1,25);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (2,10);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (3,40);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (4,50);");
+    execute_sql(&mut executor, "INSERT INTO users (id,age) VALUES (5,40);");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT age, MAX(age) FROM users GROUP BY age;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["10", "10"],
+            vec!["25", "25"],
+            vec!["40", "40"],
+            vec!["50", "50"],
+        ],
+    );
+}
+
+#[test]
+fn test_group_by_min_different_column() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            salary INT
+        );",
+    );
+
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (1,'Engineering',100);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (2,'Engineering',250);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (3,'Engineering',180);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (4,'Sales',90);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (5,'Sales',150);");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT department, MIN(salary) FROM employees GROUP BY department;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["Engineering", "100"],
+            vec!["Sales", "90"],
+        ],
+    );
+}
+
+#[test]
+fn test_group_by_max_different_column() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            salary INT
+        );",
+    );
+
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (1,'Engineering',100);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (2,'Engineering',250);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (3,'Engineering',180);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (4,'Sales',90);");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,salary) VALUES (5,'Sales',150);");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT department, MAX(salary) FROM employees GROUP BY department;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["Engineering", "250"],
+            vec!["Sales", "150"],
+        ],
+    );
+}
+
+#[test]
+fn test_group_by_min_text() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            name TEXT
+        );",
+    );
+
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (1,'Engineering','Charlie');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (2,'Engineering','Alice');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (3,'Engineering','Bob');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (4,'Sales','David');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (5,'Sales','Aaron');");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT department, MIN(name) FROM employees GROUP BY department;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["Engineering", "Alice"],
+            vec!["Sales", "Aaron"],
+        ],
+    );
+}
+
+#[test]
+fn test_group_by_max_text() {
+
+    let mut executor = create_executor();
+
+    execute_sql(
+        &mut executor,
+        "CREATE TABLE employees (
+            id INT PRIMARY KEY,
+            department TEXT,
+            name TEXT
+        );",
+    );
+
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (1,'Engineering','Charlie');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (2,'Engineering','Alice');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (3,'Engineering','Bob');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (4,'Sales','David');");
+    execute_sql(&mut executor, "INSERT INTO employees (id,department,name) VALUES (5,'Sales','Aaron');");
+
+    let result = execute_sql(
+        &mut executor,
+        "SELECT department, MAX(name) FROM employees GROUP BY department;",
+    );
+
+    assert_rows_eq_sorted(
+        result,
+        vec![
+            vec!["Engineering", "Charlie"],
+            vec!["Sales", "David"],
+        ],
+    );
 }
 

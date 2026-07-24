@@ -23,6 +23,8 @@ pub enum Token {
     Index,
     On,
 
+    Group,
+
     Primary,
     Key,
 
@@ -72,6 +74,8 @@ impl Display for Token {
             Token::Desc => write!(f, "DESC"),
             Token::Index => write!(f, "INDEX"),
             Token::On => write!(f, "ON"),
+            Token::Group => write!(f, "GROUP"),
+
 
 
             Token::Primary => write!(f, "PRIMARY"),

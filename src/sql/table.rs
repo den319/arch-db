@@ -103,7 +103,7 @@ impl Table {
                 // This preserves numeric ordering when compared
                 // lexicographically.
                 //------------------------------------------------------
-                format!("{:020}", v)
+                return format!("{:020}", v)
             }
 
             RowValue::Text(s) => s.clone(),

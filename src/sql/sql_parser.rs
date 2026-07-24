@@ -413,6 +413,31 @@ impl SQLParser {
         })
     }
 
+    fn parse_group_by(
+        &mut self,
+    ) -> Vec<String> {
+
+        let mut columns = Vec::new();
+
+        loop {
+
+            columns.push(
+                self.parse_identifier(),
+            );
+
+            if self.current_token == Token::Comma {
+
+                self.advance();
+
+                continue;
+            }
+
+            break;
+        }
+
+        columns
+    }
+
     fn parse_select(&mut self) -> Statement {
         self.expect(Token::Select);
 
@@ -427,6 +452,22 @@ impl SQLParser {
                 self.advance();
                 Some(self.parse_expression())
             } else {
+                None
+            };
+
+        let group_by =
+            if self.current_token == Token::Group {
+
+                self.advance();
+
+                self.expect(Token::By);
+
+                Some(
+                    self.parse_group_by(),
+                )
+            }
+            else {
+
                 None
             };
 
@@ -488,6 +529,7 @@ impl SQLParser {
             columns,
             table_name,
             where_clause,
+            group_by,
             order_by,
             limit
         })

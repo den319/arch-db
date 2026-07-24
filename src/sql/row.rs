@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, fmt};
     Eq,
     PartialOrd,
     Ord,
+    Hash,
 )]
 pub enum RowValue {
     Integer(i64),

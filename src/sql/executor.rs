@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{AggregateFunction, BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, CatalogDataType, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, planner::IndexLookup, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
 #[derive(Debug, PartialEq)]
@@ -17,6 +19,7 @@ pub struct Executor<'a> {
     pub engine: &'a mut Engine,
 }
 
+type GroupKey = Vec<RowValue>;
 
 impl<'a> Executor<'a> {
     pub fn new(
@@ -128,7 +131,7 @@ impl<'a> Executor<'a> {
         }
     }
 
-    fn scan_table(
+    pub fn scan_table(
         &mut self,
         table_name: &str,
     ) -> Result<Vec<(String,Row)>> {
@@ -552,6 +555,41 @@ impl<'a> Executor<'a> {
         Ok(())
     }
 
+    pub fn build_groups(
+        &self,
+        rows: Vec<(String, Row)>,
+        group_columns: &[String],
+    ) -> Result<HashMap<GroupKey, Vec<Row>>> {
+        let mut groups = HashMap::new();
+
+        for (_, row) in rows {
+
+            let mut key = Vec::new();
+
+            for column in group_columns {
+
+                let value = row
+                    .get(column)
+                    .ok_or_else(|| {
+                        DatabaseError::Other(format!(
+                            "unknown column '{}'",
+                            column,
+                        ))
+                    })?
+                    .clone();
+
+                key.push(value);
+            }
+
+            groups
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(row);
+        }
+
+        Ok(groups)
+    }
+
     fn insert_index_entries(
         &mut self,
         schema: &TableSchema,
@@ -749,73 +787,6 @@ impl<'a> Executor<'a> {
         None
     }
 
-    pub fn execute_create_table(
-        &mut self,
-        stmt: CreateTable,
-    ) -> Result<QueryResult> {
-
-        let primary_key_count = stmt
-            .columns
-            .iter()
-            .filter(|column| column.primary_key)
-            .count();
-
-        match primary_key_count {
-            0 => {
-                return Err(DatabaseError::Other(
-                    "table must contain exactly one PRIMARY KEY".into(),
-                ));
-            }
-
-            1 => {}
-
-            _ => {
-                return Err(DatabaseError::Other(
-                    "multiple PRIMARY KEY columns are not allowed".into(),
-                ));
-            }
-        }
-
-        let columns = stmt
-            .columns
-            .into_iter()
-            .enumerate()
-            .map(|(i, column)| Column {
-                name: column.name,
-                data_type: column.data_type.into(),
-                primary_key: column.primary_key,
-                nullable: !column.primary_key,
-            })
-            .collect();
-
-        let schema = TableSchema {
-            name: stmt.table_name.clone(),
-            columns,
-        };
-
-        self.catalog.create_table(schema.clone())
-            .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
-
-        let storage_key = format!(
-            "__schema__:{}",
-            stmt.table_name
-        );
-        let serialized = schema.serialize();
-
-        if let Err(err) = self.engine.put(
-            storage_key,
-            serialized,
-        ) {
-            return Err(DatabaseError::Other(
-                format!("Error: {}", err)
-            ));
-        }
-        
-        Ok(QueryResult::Message(
-            "Table created successfully".into(),
-        ))
-    }
-
     fn make_index_storage_key(
         table_name: &str,
         column_name: &str,
@@ -874,6 +845,249 @@ impl<'a> Executor<'a> {
                 column,
             ))
         })
+    }
+
+    fn evaluate_group_aggregate(
+        &self,
+        function: &AggregateFunction,
+        argument: &Expr,
+        rows: &[Row],
+    ) -> Result<RowValue> {
+
+        match function {
+
+            AggregateFunction::Count => {
+
+                match argument {
+
+                    Expr::Wildcard => {
+
+                        Ok(
+                            RowValue::Integer(
+                                rows.len() as i64,
+                            )
+                        )
+                    }
+
+                    _ => {
+
+                        Err(
+                            DatabaseError::Other(
+                                "COUNT currently only supports * in GROUP BY".into(),
+                            )
+                        )
+                    }
+                }
+            }
+
+            AggregateFunction::Sum => {
+                let column = match argument {
+
+                    Expr::Identifier(name) => name,
+
+                    _ => {
+
+                        return Err(
+                            DatabaseError::Other(
+                                "SUM expects a column".into(),
+                            )
+                        );
+                    }
+                };
+
+                let mut total = 0_i64;
+                for row in rows {
+                    let value = self.aggregate_column_value(
+                        row,
+                        column,
+                    )?;
+
+                    match value.as_integer() {
+
+                        Some(number) => {
+
+                            total += number;
+                        }
+
+                        None => {
+
+                            return Err(
+                                DatabaseError::Other(
+                                    "SUM only supports INTEGER columns".into(),
+                                )
+                            );
+                        }
+                    }
+                }
+                Ok(
+                    RowValue::Integer(total)
+                )
+            }
+            
+            AggregateFunction::Min => {
+
+                let column = match argument {
+
+                    Expr::Identifier(name) => name,
+
+                    _ => {
+
+                        return Err(
+                            DatabaseError::Other(
+                                "MIN expects a column".into(),
+                            )
+                        );
+                    }
+                };
+
+                if rows.is_empty() {
+
+                    return Err(
+                        DatabaseError::Other(
+                            "MIN on empty group".into(),
+                        )
+                    );
+                }
+
+                let mut smallest =
+                    self.aggregate_column_value(
+                        &rows[0],
+                        column,
+                    )?;
+
+                for row in &rows[1..] {
+
+                    let value =
+                        self.aggregate_column_value(
+                            row,
+                            column,
+                        )?;
+
+                    if value < smallest {
+
+                        smallest = value;
+                    }
+                }
+
+                Ok(smallest.clone())
+            }
+
+            AggregateFunction::Max => {
+
+                let column = match argument {
+
+                    Expr::Identifier(name) => name,
+
+                    _ => {
+
+                        return Err(
+                            DatabaseError::Other(
+                                "MAX expects a column".into(),
+                            )
+                        );
+                    }
+                };
+
+                if rows.is_empty() {
+
+                    return Err(
+                        DatabaseError::Other(
+                            "MAX on empty group".into(),
+                        )
+                    );
+                }
+
+                let mut largest =
+                    self.aggregate_column_value(
+                        &rows[0],
+                        column,
+                    )?;
+
+                for row in &rows[1..] {
+
+                    let value =
+                        self.aggregate_column_value(
+                            row,
+                            column,
+                        )?;
+
+                    if value > largest {
+
+                        largest = value;
+                    }
+                }
+
+                Ok(largest.clone())
+            }
+            
+            AggregateFunction::Avg => {
+                let column = match argument {
+
+                    Expr::Identifier(name) => name,
+
+                    _ => {
+
+                        return Err(
+                            DatabaseError::Other(
+                                "AVG expects a column".into(),
+                            )
+                        );
+                    }
+                };
+
+                let mut total = 0_i64;
+
+                for row in rows {
+
+                    let value = self.aggregate_column_value(
+                        row,
+                        column,
+                    )?;
+
+                    match value.as_integer() {
+
+                        Some(number) => {
+
+                            total += number;
+                        }
+
+                        None => {
+
+                            return Err(
+                                DatabaseError::Other(
+                                    "AVG only supports INTEGER columns".into(),
+                                )
+                            );
+                        }
+                    }
+                }
+
+                if rows.is_empty() {
+
+                    return Err(
+                        DatabaseError::Other(
+                            "AVG on empty group".into(),
+                        )
+                    );
+                }
+
+                let average = total / rows.len() as i64;
+
+                Ok(
+                    RowValue::Integer(average)
+                )
+            }
+            
+            
+            _ => {
+
+                Err(
+                    DatabaseError::Other(
+                        "Aggregate not implemented for GROUP BY".into(),
+                    )
+                )
+            }
+        }
     }
 
     fn execute_aggregate(
@@ -1229,6 +1443,144 @@ impl<'a> Executor<'a> {
         }
     }
 
+    fn execute_group_by(
+        &mut self,
+        stmt: &Select,
+    ) -> Result<QueryResult> {
+
+        let group_columns = stmt
+            .group_by
+            .as_ref()
+            .expect("GROUP BY should exist");
+
+        //------------------------------------------------------
+        // Fetch rows
+        //------------------------------------------------------
+
+        let rows = match &stmt.where_clause {
+
+            Some(expr) => {
+
+                match self.fetch_matching_rows(
+                    &stmt.table_name,
+                    expr,
+                ) {
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return Err(DatabaseError::Other(format!(
+                            "Error: {}",
+                            err,
+                        )));
+                    }
+                }
+            }
+
+            None => {
+
+                match self.scan_table(
+                    &stmt.table_name,
+                ) {
+                    Ok(rows) => rows,
+
+                    Err(err) => {
+                        return Err(DatabaseError::Other(format!(
+                            "Error: {}",
+                            err,
+                        )));
+                    }
+                }
+            }
+        };
+
+        //------------------------------------------------------
+        // Build groups
+        //------------------------------------------------------
+
+        let groups = match self.build_groups(
+            rows,
+            group_columns,
+        ) {
+
+            Ok(groups) => groups,
+
+            Err(err) => {
+                return Ok(QueryResult::Message(format!(
+                    "Error: {}",
+                    err,
+                )));
+            }
+        };
+
+        
+        let (function, argument) = match &stmt.columns[1] {
+
+            SelectItem::Aggregate {
+
+                function,
+                argument,
+
+            } => (function, argument),
+
+            _ => unreachable!(),
+        };
+
+        match function {
+
+            AggregateFunction::Count |
+            AggregateFunction::Sum |
+            AggregateFunction::Min |
+            AggregateFunction::Max |
+            AggregateFunction::Avg => {}
+
+            _ => {
+
+                return Ok(
+                    QueryResult::Message(
+                        "Aggregate not yet supported with GROUP BY".into(),
+                    )
+                );
+            }
+        }
+
+        let mut result = Vec::new();
+
+        for (key, rows) in groups {
+
+            let mut output = Vec::new();
+
+            // GROUP BY column
+            output.push(
+                key[0].to_string(),
+            );
+
+            let value = match self.evaluate_group_aggregate(
+                function,
+                argument,
+                &rows,
+            ) {
+
+                Ok(value) => value,
+
+                Err(err) => {
+
+                    return Err(DatabaseError::Other(
+                        format!("Error: {}", err),
+                    ));
+                }
+            };
+
+            // Aggregate value
+            output.push(
+                value.to_string(),
+            );
+
+            result.push(output);
+        }
+
+        Ok(QueryResult::Rows(result))
+    }
+
     pub fn execute_create_index(
         &mut self,
         stmt: CreateIndex,
@@ -1312,6 +1664,73 @@ impl<'a> Executor<'a> {
         ))
     }
 
+        pub fn execute_create_table(
+        &mut self,
+        stmt: CreateTable,
+    ) -> Result<QueryResult> {
+
+        let primary_key_count = stmt
+            .columns
+            .iter()
+            .filter(|column| column.primary_key)
+            .count();
+
+        match primary_key_count {
+            0 => {
+                return Err(DatabaseError::Other(
+                    "table must contain exactly one PRIMARY KEY".into(),
+                ));
+            }
+
+            1 => {}
+
+            _ => {
+                return Err(DatabaseError::Other(
+                    "multiple PRIMARY KEY columns are not allowed".into(),
+                ));
+            }
+        }
+
+        let columns = stmt
+            .columns
+            .into_iter()
+            .enumerate()
+            .map(|(i, column)| Column {
+                name: column.name,
+                data_type: column.data_type.into(),
+                primary_key: column.primary_key,
+                nullable: !column.primary_key,
+            })
+            .collect();
+
+        let schema = TableSchema {
+            name: stmt.table_name.clone(),
+            columns,
+        };
+
+        self.catalog.create_table(schema.clone())
+            .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
+
+        let storage_key = format!(
+            "__schema__:{}",
+            stmt.table_name
+        );
+        let serialized = schema.serialize();
+
+        if let Err(err) = self.engine.put(
+            storage_key,
+            serialized,
+        ) {
+            return Err(DatabaseError::Other(
+                format!("Error: {}", err)
+            ));
+        }
+        
+        Ok(QueryResult::Message(
+            "Table created successfully".into(),
+        ))
+    }
+
     pub fn execute_insert(
         &mut self,
         stmt: Insert,
@@ -1385,6 +1804,20 @@ impl<'a> Executor<'a> {
         &mut self,
         stmt: Select,
     ) -> QueryResult {
+
+        if stmt.group_by.is_some() {
+            let result= match self.execute_group_by(&stmt) {
+                Ok(result) => result,
+                Err(err) => {
+                    return QueryResult::Message(format!(
+                        "Error: {}",
+                        err
+                    ));
+                }
+            };
+
+            return result;
+        }
 
         let schema = match self.catalog.table(&stmt.table_name) {
             Some(schema) => schema.clone(),
