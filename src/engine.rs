@@ -1,12 +1,8 @@
 use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BinaryHeap, HashMap},
-    fs,
-    sync::{
+    cmp::Ordering, collections::{BTreeMap, BinaryHeap, HashMap}, fs, println, sync::{
         Arc, Mutex,
         mpsc::{self, Sender},
-    },
-    thread,
+    }, thread,
 };
 
 use crate::{cache::BlockCache, engine_iterator::EngineIterator, memtable_iterator::MemtableIterator, merge_iterator::MergeIterator, range_iterator::RangeStorageIterator, sstable::SSTableIterator, storage::{Storage, SyncPolicy}, storage_iterator::StorageIterator, unified_storage_iterator::UnifiedStorageIterator};
@@ -311,12 +307,15 @@ impl Engine {
         // Lock released — background compaction can proceed
 
         for (path, index) in &candidates {
+            // println!("Searching {:?}", path);
             if let Some(v) = Self::search_one(path, index, key, &mut self.block_cache) {
+                // println!("FOUND!");
                 return Some(v);
             }
+            // println!("NOT FOUND in {:?}", path);
         }
 
-        Some(Value::Tombstone)
+        None
     }
 
     pub fn search_one(
@@ -353,6 +352,10 @@ impl Engine {
                 return None;
             }
         };
+
+        // for r in &records {
+        //     println!("BLOCK RECORD: {}", r.key);
+        // }
 
         cache.insert(cache_key, records.clone());
 

@@ -729,6 +729,16 @@ pub fn find_block<'a>(
     key: &str,
 ) -> Option<&'a BlockMeta> {
 
+    // println!("Looking for {}", key);
+
+    // for block in &index.blocks {
+    //     println!(
+    //         "start={} offset={}",
+    //         block.start_key,
+    //         block.offset
+    //     );
+    // }
+
     let block_index = find_block_index(index, key)?;
 
     index.blocks.get(block_index)
@@ -958,6 +968,10 @@ pub fn read_footer(path: &str) -> Result<FooterMetadata> {
 
     let file_size = file.metadata()?.len();
 
+    if file_size < 8 {
+        return Err(format!("File too small to contain footer: {} bytes", file_size).into());
+    }
+
     file.seek(SeekFrom::Start(file_size - 8))?;
 
     let mut size_buf = [0u8; 8];
@@ -965,6 +979,14 @@ pub fn read_footer(path: &str) -> Result<FooterMetadata> {
     file.read_exact(&mut size_buf)?;
 
     let footer_size = u64::from_le_bytes(size_buf);
+
+    if file_size < 8 + footer_size {
+        return Err(format!(
+            "Corrupted SSTable: footer_size {} exceeds file_size {}",
+            footer_size, file_size
+        )
+        .into());
+    }
 
     file.seek(SeekFrom::Start(file_size - 8 - footer_size))?;
 

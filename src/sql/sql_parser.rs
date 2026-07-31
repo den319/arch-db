@@ -1,3 +1,5 @@
+use std::println;
+
 use crate::sql::{
     ast::*,
     lexer::Lexer,
@@ -48,8 +50,19 @@ impl SQLParser {
         }
     }
 
-    pub fn parse_literal(&mut self) -> Expr {
+    pub fn parse_primary(&mut self) -> Expr {
         match &self.current_token {
+            Token::LeftParen => {
+
+                self.advance();
+
+                let expr = self.parse_expression();
+
+                self.expect(Token::RightParen);
+
+                expr
+            }
+
             Token::Number(n) => {
                 let n = *n;
                 self.advance();
@@ -63,9 +76,18 @@ impl SQLParser {
             }
 
             Token::Identifier(id) => {
-                let id = id.clone();
+                let name = id.clone();
                 self.advance();
-                Expr::Identifier(id)
+
+                //------------------------------------------------------
+                // Aggregate function? e.g. COUNT(*), SUM(age)
+                //------------------------------------------------------
+
+                if self.current_token == Token::LeftParen {
+                    return self.parse_aggregate_expr(name);
+                }
+
+                Expr::Identifier(name)
             }
 
             _ => panic!("Expected literal"),
@@ -154,7 +176,7 @@ impl SQLParser {
         let mut exprs = Vec::new();
 
         loop {
-            exprs.push(self.parse_literal());
+            exprs.push(self.parse_primary());
 
             if self.current_token == Token::Comma {
                 self.advance();
@@ -167,24 +189,10 @@ impl SQLParser {
         exprs
     }
 
-    fn parse_aggregate_select_item(
+    fn parse_aggregate_expr(
         &mut self,
-    ) -> SelectItem {
-
-        let function_name = self.parse_identifier();
-
-        //------------------------------------------------------
-        // Normal column?
-        //------------------------------------------------------
-
-        if self.current_token != Token::LeftParen {
-
-            return SelectItem::Column(function_name);
-        }
-
-        //------------------------------------------------------
-        // Aggregate
-        //------------------------------------------------------
+        function_name: String,
+    ) -> Expr {
 
         self.expect(Token::LeftParen);
 
@@ -229,9 +237,47 @@ impl SQLParser {
 
         self.expect(Token::RightParen);
 
-        SelectItem::Aggregate {
+        Expr::Aggregate {
             function,
-            argument,
+            argument: Box::new(argument),
+        }
+    }
+
+    fn parse_aggregate_select_item(
+        &mut self,
+    ) -> SelectItem {
+
+        let function_name = self.parse_identifier();
+
+        //------------------------------------------------------
+        // Normal column?
+        //------------------------------------------------------
+
+        if self.current_token != Token::LeftParen {
+
+            return SelectItem::Column(function_name);
+        }
+
+        //------------------------------------------------------
+        // Aggregate — delegate to the shared helper
+        //------------------------------------------------------
+
+        let expr = self.parse_aggregate_expr(function_name);
+
+        match expr {
+
+            Expr::Aggregate {
+                function,
+                argument,
+            } => {
+
+                SelectItem::Aggregate {
+                    function,
+                    argument: *argument,
+                }
+            }
+
+            _ => unreachable!(),
         }
     }
 
@@ -269,6 +315,7 @@ impl SQLParser {
 
         items
     }
+
 
     fn parse_create_table(
         &mut self,
@@ -344,7 +391,7 @@ impl SQLParser {
 
         self.expect(Token::Equal);
 
-        let value = self.parse_literal();
+        let value = self.parse_primary();
 
         Assignment {
             column,
@@ -376,18 +423,89 @@ impl SQLParser {
         assignments
     }
 
-    pub fn parse_expression(&mut self) -> Expr {
-        let left = self.parse_literal();
+    fn parse_comparison(
+        &mut self,
+    ) -> Expr {
+
+        // Parenthesized sub-expression: parse the whole inner expression
+        // and return without requiring a trailing comparison operator.
+        if self.current_token == Token::LeftParen {
+            self.advance();
+            let expr = self.parse_expression();
+            self.expect(Token::RightParen);
+            return expr;
+        }
+
+        let left = self.parse_primary();
 
         let op = self.parse_binary_operator();
 
-        let right = self.parse_literal();
+        let right = self.parse_primary();
 
         Expr::Binary {
             left: Box::new(left),
             op,
             right: Box::new(right),
         }
+    }
+
+    fn parse_and(
+        &mut self,
+    ) -> Expr {
+
+        let mut left =
+            self.parse_comparison();
+
+        while self.current_token == Token::And {
+
+            self.advance();
+
+            let right =
+                self.parse_comparison();
+
+            left = Expr::Binary {
+
+                left: Box::new(left),
+
+                op: BinaryOperator::And,
+
+                right: Box::new(right),
+            };
+        }
+
+        left
+    }
+
+    fn parse_or(
+        &mut self,
+    ) -> Expr {
+
+        let mut left =
+            self.parse_and();
+
+        while self.current_token == Token::Or {
+
+            self.advance();
+
+            let right =
+                self.parse_and();
+
+            left = Expr::Binary {
+
+                left: Box::new(left),
+
+                op: BinaryOperator::Or,
+
+                right: Box::new(right),
+            };
+        }
+
+        left
+    }
+
+    pub fn parse_expression(&mut self) -> Expr {
+
+        self.parse_or()
     }
 
     fn parse_create_index(
@@ -441,6 +559,18 @@ impl SQLParser {
     fn parse_select(&mut self) -> Statement {
         self.expect(Token::Select);
 
+        let distinct =
+            if self.current_token == Token::Distinct {
+
+                self.advance();
+
+                true
+
+            } else {
+
+                false
+            };
+
         let columns = self.parse_select_items();
 
         self.expect(Token::From);
@@ -464,6 +594,20 @@ impl SQLParser {
 
                 Some(
                     self.parse_group_by(),
+                )
+            }
+            else {
+
+                None
+            };
+
+        let having =
+            if self.current_token == Token::Having {
+
+                self.advance();
+
+                Some(
+                    self.parse_expression(),
                 )
             }
             else {
@@ -525,13 +669,17 @@ impl SQLParser {
             None
         };
 
+        // println!("distinct: {:?}", distinct);
+
         Statement::Select(Select {
             columns,
             table_name,
             where_clause,
             group_by,
+            having,
             order_by,
-            limit
+            limit,
+            distinct,
         })
     }
 

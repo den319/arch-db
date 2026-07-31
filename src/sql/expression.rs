@@ -1,3 +1,5 @@
+use std::todo;
+
 use crate::{
     error::Result, sql::{
         ast::{BinaryOperator, Expr}, row::{Row, RowValue},
@@ -58,7 +60,55 @@ impl ExpressionEvaluator {
             BinaryOperator::LessThanOrEqual => {
                 Self::evaluate_less_than_or_equal(row, left, right)
             }
+
+            BinaryOperator::And => {
+                Self::evaluate_and(row, left, right)
+            }
+
+            BinaryOperator::Or => {
+                Self::evaluate_or(row, left, right)
+            }
         }
+    }
+
+    fn evaluate_and(row: &Row, left: &Expr, right: &Expr) -> Result<bool> {
+        let left_result =
+            Self::evaluate(
+                row,
+                left,
+            )?;
+
+        if !left_result {
+            return Ok(false);
+        }
+
+        let right_result =
+            Self::evaluate(
+                row,
+                right,
+            )?;
+
+        Ok(right_result)
+    }
+
+        fn evaluate_or(row: &Row, left: &Expr, right: &Expr) -> Result<bool> {
+        let left_result =
+            Self::evaluate(
+                row,
+                left,
+            )?;
+
+        if left_result {
+            return Ok(true);
+        }
+
+        let right_result =
+            Self::evaluate(
+                row,
+                right,
+            )?;
+
+        Ok(right_result)
     }
 
     fn evaluate_equal(

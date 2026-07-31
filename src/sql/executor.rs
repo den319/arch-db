@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::{HashMap, HashSet}, println};
 
 use crate::{engine::{Engine, Value}, error::{DatabaseError, Result}, sql::{ast::{AggregateFunction, BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, OrderDirection, Select, SelectItem, Statement, Update}, catalog::{Catalog, CatalogDataType, Column, IndexSchema, TableSchema}, expression::ExpressionEvaluator, planner::IndexLookup, row::{Row, RowValue}, table::Table}, storage_iterator::StorageIterator};
 
@@ -142,8 +142,11 @@ impl<'a> Executor<'a> {
 
         let mut iter = self.engine.iter()?;
 
+        // println!("table name: {:?}, prefix: {:?}", table_name, prefix);
+
         while let Some(record) = iter.next()? {
 
+            // println!("record: {:?}", record);
             if !record.key.starts_with(&prefix) {
                 continue;
             }
@@ -160,6 +163,7 @@ impl<'a> Executor<'a> {
             }
         }
 
+        // println!("rows: {:?}", rows);
         Ok(rows)
     }
 
@@ -313,10 +317,12 @@ impl<'a> Executor<'a> {
                 &row,
                 where_clause,
             )? {
-
+                // println!("evaluator: {:?} {:?}", key, row);
                 result.push((key, row));
             }
         }
+
+        // println!("matching result: {:?}", result);
 
         Ok(result)
     }
@@ -809,6 +815,73 @@ impl<'a> Executor<'a> {
         );
     }
 
+            fn validate_value_type(
+        &self,
+        column: &Column,
+        value: &RowValue,
+    ) -> Result<()> {
+
+        match (&column.data_type, value) {
+
+            //--------------------------------------------------
+            // Valid combinations
+            //--------------------------------------------------
+
+            (
+                CatalogDataType::Integer,
+                RowValue::Integer(_),
+            ) => Ok(()),
+
+            (
+                CatalogDataType::Text,
+                RowValue::Text(_),
+            ) => Ok(()),
+
+            //--------------------------------------------------
+            // Everything else is invalid
+            //--------------------------------------------------
+
+            _ => Err(
+                DatabaseError::Other(
+                    format!(
+                        "Type mismatch: column '{}' expects {:?} but received {}",
+                        column.name,
+                        column.data_type,
+                        match value {
+                            RowValue::Integer(_) => "INTEGER",
+                            RowValue::Text(_) => "TEXT",
+                        }
+                    )
+                )
+            ),
+        }
+    }
+
+    fn validate_row_types(
+        &self,
+        schema: &TableSchema,
+        row: &Row,
+    ) -> Result<()> {
+
+        for column in &schema.columns {
+
+            let value = row.get(&column.name).ok_or_else(|| {
+                DatabaseError::Other(format!(
+                    "Missing value for column '{}'",
+                    column.name,
+                ))
+            })?;
+
+            self.validate_value_type(
+                column,
+                value,
+            )?;
+        }
+
+        Ok(())
+    }
+
+
     fn aggregate_rows(
         &mut self,
         stmt: &Select,
@@ -845,6 +918,182 @@ impl<'a> Executor<'a> {
                 column,
             ))
         })
+    }
+
+
+    fn evaluate_having_value(
+        &mut self,
+        expr: &Expr,
+        rows: &[Row],
+    ) -> Result<RowValue> {
+
+        match expr {
+
+            //--------------------------------------------------
+            // Numeric literal
+            //--------------------------------------------------
+
+            Expr::Number(n) => {
+
+                Ok(
+                    RowValue::Integer(*n)
+                )
+            }
+
+            //--------------------------------------------------
+            // String literal
+            //--------------------------------------------------
+
+            Expr::String(s) => {
+
+                Ok(
+                    RowValue::Text(s.clone())
+                )
+            }
+
+            //--------------------------------------------------
+            // Aggregate
+            //--------------------------------------------------
+
+            Expr::Aggregate {
+
+                function,
+                argument,
+
+            } => {
+
+                self.evaluate_group_aggregate(
+                    function,
+                    argument,
+                    rows,
+                )
+            }
+
+            _ => {
+
+                Err(
+                    DatabaseError::Other(
+                        "Unsupported HAVING expression".into(),
+                    )
+                )
+            }
+        }
+    }
+
+    fn evaluate_having(
+        &mut self,
+        expr: &Expr,
+        rows: &[Row],
+    ) -> Result<bool> {
+
+        match expr {
+
+            Expr::Binary {
+
+                left,
+                op,
+                right,
+
+            } => {
+
+                let left =
+                    self.evaluate_having_value(
+                        left,
+                        rows,
+                    )?;
+
+                let right =
+                    self.evaluate_having_value(
+                        right,
+                        rows,
+                    )?;
+
+                match (left, right) {
+
+                    (
+                        RowValue::Integer(left),
+                        RowValue::Integer(right),
+                    ) => {
+
+                        Ok(match op {
+
+                            BinaryOperator::Equal =>
+                                left == right,
+
+                            BinaryOperator::NotEqual =>
+                                left != right,
+
+                            BinaryOperator::GreaterThan =>
+                                left > right,
+
+                            BinaryOperator::GreaterThanOrEqual =>
+                                left >= right,
+
+                            BinaryOperator::LessThan =>
+                                left < right,
+
+                            BinaryOperator::LessThanOrEqual =>
+                                left <= right,
+
+                            BinaryOperator::And | BinaryOperator::Or =>
+                            return Err(DatabaseError::Other(
+                                "AND/OR not supported in HAVING".into(),
+                            )),
+                        })
+                    }
+
+                    (
+                        RowValue::Text(left),
+                        RowValue::Text(right),
+                    ) => {
+
+                        Ok(match op {
+
+                            BinaryOperator::Equal =>
+                                left == right,
+
+                            BinaryOperator::NotEqual =>
+                                left != right,
+
+                            BinaryOperator::GreaterThan =>
+                                left > right,
+
+                            BinaryOperator::GreaterThanOrEqual =>
+                                left >= right,
+
+                            BinaryOperator::LessThan =>
+                                left < right,
+
+                            BinaryOperator::LessThanOrEqual =>
+                                left <= right,
+                            
+                            BinaryOperator::And | BinaryOperator::Or =>
+                                return Err(DatabaseError::Other(
+                                    "AND/OR not supported in HAVING".into(),
+                                )),
+                        })
+                    }
+
+                    _ => {
+
+                        Err(
+                            DatabaseError::Other(
+                                "HAVING type mismatch".into(),
+                            )
+                        )
+                    }
+                }
+            }
+
+            _ => {
+
+                Err(
+                    DatabaseError::Other(
+                        "Invalid HAVING clause".into(),
+                    )
+                )
+            }
+        }
     }
 
     fn evaluate_group_aggregate(
@@ -1512,68 +1761,119 @@ impl<'a> Executor<'a> {
             }
         };
 
-        
-        let (function, argument) = match &stmt.columns[1] {
-
-            SelectItem::Aggregate {
-
-                function,
-                argument,
-
-            } => (function, argument),
-
-            _ => unreachable!(),
-        };
-
-        match function {
-
-            AggregateFunction::Count |
-            AggregateFunction::Sum |
-            AggregateFunction::Min |
-            AggregateFunction::Max |
-            AggregateFunction::Avg => {}
-
-            _ => {
-
-                return Ok(
-                    QueryResult::Message(
-                        "Aggregate not yet supported with GROUP BY".into(),
-                    )
-                );
-            }
-        }
-
         let mut result = Vec::new();
 
         for (key, rows) in groups {
 
             let mut output = Vec::new();
 
-            // GROUP BY column
-            output.push(
-                key[0].to_string(),
-            );
+                //--------------------------------------------------
+                // HAVING
+                //--------------------------------------------------
 
-            let value = match self.evaluate_group_aggregate(
-                function,
-                argument,
-                &rows,
-            ) {
+                if let Some(having) = &stmt.having {
 
-                Ok(value) => value,
+                    let keep_group =
+                        match self.evaluate_having(
+                            having,
+                            &rows,
+                        ) {
 
-                Err(err) => {
+                            Ok(value) => value,
 
-                    return Err(DatabaseError::Other(
-                        format!("Error: {}", err),
-                    ));
+                            Err(err) => {
+
+                                return Err(err);
+                            }
+                        };
+
+                    if !keep_group {
+
+                        continue;
+                    }
                 }
-            };
 
-            // Aggregate value
-            output.push(
-                value.to_string(),
-            );
+            //--------------------------------------------------
+            // Process every SELECT item
+            //--------------------------------------------------
+
+            for select_item in &stmt.columns {
+
+                match select_item {
+
+                    //--------------------------------------------------
+                    // Normal column
+                    //--------------------------------------------------
+
+                    SelectItem::Column(column_name) => {
+
+                        let position = match group_columns
+                            .iter()
+                            .position(|c| c == column_name)
+                        {
+                            Some(position) => position,
+
+                            None => {
+                                return Ok(
+                                    QueryResult::Message(format!(
+                                        "Column '{}' must appear in GROUP BY or be used in an aggregate function",
+                                        column_name,
+                                    )),
+                                );
+                            }
+                        };
+                        output.push(
+                            key[position].to_string(),
+                        );
+                    }
+
+                    //--------------------------------------------------
+                    // Aggregate
+                    //--------------------------------------------------
+
+                    SelectItem::Aggregate {
+
+                        function,
+                        argument,
+
+                    } => {
+
+                        let value =
+                            match self.evaluate_group_aggregate(
+                                function,
+                                argument,
+                                &rows,
+                            ) {
+
+                                Ok(value) => value,
+
+                                Err(err) => {
+
+                                    return Err(
+                                        DatabaseError::Other(
+                                            format!(
+                                                "Error: {}",
+                                                err,
+                                            ),
+                                        )
+                                    );
+                                }
+                            };
+
+                        output.push(
+                            value.to_string(),
+                        );
+                    }
+
+                    SelectItem::Wildcard => {
+                        return Err(
+                            DatabaseError::Other(
+                                "SELECT * not supported with GROUP BY".to_string(),
+                            ),
+                        );
+                    }
+                }
+            }
 
             result.push(output);
         }
@@ -1664,7 +1964,8 @@ impl<'a> Executor<'a> {
         ))
     }
 
-        pub fn execute_create_table(
+
+    pub fn execute_create_table(
         &mut self,
         stmt: CreateTable,
     ) -> Result<QueryResult> {
@@ -1731,6 +2032,7 @@ impl<'a> Executor<'a> {
         ))
     }
 
+
     pub fn execute_insert(
         &mut self,
         stmt: Insert,
@@ -1775,6 +2077,9 @@ impl<'a> Executor<'a> {
             values,
         )
         .map_err(|e| DatabaseError::Other(format!("{:?}", e)))?;
+
+        // Validate types against schema before writing
+        self.validate_row_types(&schema, &row)?;
 
         let key = table
             .storage_key(&row)
@@ -1856,30 +2161,30 @@ impl<'a> Executor<'a> {
                     Ok(key) => key,
                     Err(err) => {
                         return QueryResult::Message(format!(
-                            "Error: {}",
+                            "Error in fast path: {}",
                             err
                         ));
                     }
                 };
 
-                let value = match self.engine.get(&key) {
+                match self.engine.get(&key) {
 
-                    Some(Value::Data(data)) => data,
+                    Some(Value::Data(data)) => {
+                        let row = Row::deserialize(&data);
+
+                        let values = self.project_row(
+                            &row,
+                            &stmt.columns,
+                            &schema.columns,
+                        );
+
+                        return QueryResult::Rows(vec![values]);
+                    }
 
                     Some(Value::Tombstone) | None => {
-                        return QueryResult::Rows(vec![]);
+                        // Key not found via fast path — fall through to table scan
                     }
-                };
-
-                let row = Row::deserialize(&value);
-
-                let values = self.project_row(
-                    &row,
-                    &stmt.columns,
-                    &schema.columns,
-                );
-
-                return QueryResult::Rows(vec![values]);
+                }
             }
         }
 
@@ -1895,10 +2200,13 @@ impl<'a> Executor<'a> {
                     &stmt.table_name,
                     expr,
                 ) {
-                    Ok(rows) => rows,
+                    Ok(rows) => {
+                        println!("matching rows: {:?}", rows);
+                        rows
+                    },
                     Err(err) => {
                         return QueryResult::Message(format!(
-                            "Error: {}",
+                            "Error in direct fallback: {}",
                             err
                         ));
                     }
@@ -1913,7 +2221,7 @@ impl<'a> Executor<'a> {
 
                     Err(err) => {
                         return QueryResult::Message(format!(
-                            "Error: {}",
+                            "Error in fallback: {}",
                             err
                         ));
                     }
@@ -1977,15 +2285,6 @@ impl<'a> Executor<'a> {
             });
         }
 
-        //----------------------------------------------------------
-        // LIMIT
-        //----------------------------------------------------------
-
-        if let Some(limit) = stmt.limit {
-
-            filtered_rows.truncate(limit);
-        }
-
         let mut result = Vec::new();
 
         for row in filtered_rows {
@@ -1997,6 +2296,30 @@ impl<'a> Executor<'a> {
             );
 
             result.push(values);
+        }
+
+        //------------------------------------------------------
+        // DISTINCT (applied before LIMIT per SQL semantics)
+        //------------------------------------------------------
+
+        if stmt.distinct {
+
+            let mut seen = HashSet::new();
+
+            result.retain(|row| {
+
+                seen.insert(row.clone())
+
+            });
+        }
+
+        //----------------------------------------------------------
+        // LIMIT
+        //----------------------------------------------------------
+
+        if let Some(limit) = stmt.limit {
+
+            result.truncate(limit);
         }
 
         QueryResult::Rows(result)
@@ -2192,13 +2515,14 @@ impl<'a> Executor<'a> {
                 }
             };
 
+            
             let row_data = match self.engine.get(&key) {
 
                 Some(Value::Data(data)) => data,
 
-                _ => {
+                Some(Value::Tombstone) | None => {
                     return QueryResult::Message(
-                        "Error: row not found".into(),
+                        "0 rows updated".into(),
                     );
                 }
             };
@@ -2234,6 +2558,21 @@ impl<'a> Executor<'a> {
                         );
                     }
                 };
+
+                // Validate type against schema
+                if let Some(column) = schema.column(&assignment.column) {
+
+                    if let Err(err) =
+                        self.validate_value_type(
+                            column,
+                            &value,
+                        )
+                    {
+                        return QueryResult::Message(
+                            err.to_string(),
+                        );
+                    }
+                }
 
                 if let Err(_) = row.update(
                     &assignment.column,
@@ -2343,6 +2682,21 @@ impl<'a> Executor<'a> {
                         );
                     }
                 };
+
+                // Validate type against schema
+                if let Some(column) = schema.column(&assignment.column) {
+
+                    if let Err(err) =
+                        self.validate_value_type(
+                            column,
+                            &value,
+                        )
+                    {
+                        return QueryResult::Message(
+                            err.to_string(),
+                        );
+                    }
+                }
 
                 if let Err(_) = row.update(
                     &assignment.column,

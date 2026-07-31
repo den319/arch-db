@@ -23,7 +23,12 @@ pub enum Token {
     Index,
     On,
 
+    And, 
+    Or,
+
     Group,
+    Having,
+    Distinct,
 
     Primary,
     Key,
@@ -75,6 +80,13 @@ impl Display for Token {
             Token::Index => write!(f, "INDEX"),
             Token::On => write!(f, "ON"),
             Token::Group => write!(f, "GROUP"),
+            Token::Having => write!(f, "HAVING"),
+            Token::Distinct => write!(f, "DISTINCT"),
+
+            Token::And => write!(f, "AND"),
+            Token::Or => write!(f, "OR"),
+
+
 
 
 

@@ -1,4 +1,4 @@
-use crate::sql::token::Token;
+use crate::sql::token::{self, Token};
 
 pub struct Lexer {
     pub input: Vec<char>,
@@ -164,11 +164,18 @@ impl Lexer {
             "INDEX" => Token::Index,
             "ON" => Token::On,
 
+            "AND" => Token::And,
+            "OR" => Token::Or,
+
 
             "PRIMARY" => Token::Primary,
             "KEY" => Token::Key,
 
             "GROUP" => Token::Group,
+            "HAVING" => Token::Having,
+            "DISTINCT" => Token::Distinct,
+
+
 
             _ => Token::Identifier(identifier.to_string()),
         }

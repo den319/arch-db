@@ -53,10 +53,13 @@ pub struct Select {
     pub where_clause: Option<Expr>,
 
     pub group_by: Option<Vec<String>>,
+    pub having: Option<Expr>,
 
     pub order_by: Option<OrderBy>,
 
     pub limit: Option<usize>,
+    pub distinct: bool,
+
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +112,11 @@ pub enum Expr {
 
     String(String),
 
+    Aggregate {
+        function: AggregateFunction,
+        argument: Box<Expr>,
+    },
+
     Binary {
         left: Box<Expr>,
         op: BinaryOperator,
@@ -126,6 +134,9 @@ pub enum BinaryOperator {
 
     LessThan,
     LessThanOrEqual,
+
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, PartialEq)]

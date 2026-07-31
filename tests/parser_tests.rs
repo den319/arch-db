@@ -1,5 +1,5 @@
 use arch_db::sql::{
-    ast::{Assignment, BinaryOperator, DataType, Expr, OrderDirection, SelectItem, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser,
+    ast::{AggregateFunction, Assignment, BinaryOperator, DataType, Expr, OrderDirection, SelectItem, Statement}, lexer::Lexer, sql_parser::SQLParser as Parser,
 };
 
 #[test]
@@ -1312,5 +1312,245 @@ fn test_parse_group_by_order_by_limit() {
         }
 
         _ => panic!("Expected SELECT"),
+    }
+}
+
+#[test]
+fn test_parse_select_group_by_having_count() {
+
+    let sql = "
+        SELECT age, COUNT(*)
+        FROM users
+        GROUP BY age
+        HAVING COUNT(*) > 2;
+    ";
+
+    let lexer = Lexer::new(sql);
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    let select = match statement {
+
+        Statement::Select(select) => select,
+
+        _ => panic!("expected SELECT"),
+    };
+
+    assert!(select.group_by.is_some());
+    assert!(select.having.is_some());
+
+    let having = select.having.unwrap();
+
+    match having {
+
+        Expr::Binary {
+
+            left,
+            op,
+            right,
+
+        } => {
+
+            assert_eq!(
+                op,
+                BinaryOperator::GreaterThan,
+            );
+
+            match *left {
+
+                Expr::Aggregate {
+
+                    function,
+                    argument,
+
+                } => {
+
+                    assert_eq!(
+                        function,
+                        AggregateFunction::Count,
+                    );
+
+                    assert_eq!(
+                        *argument,
+                        Expr::Wildcard,
+                    );
+                }
+
+                _ => panic!(
+                    "expected aggregate",
+                ),
+            }
+
+            assert_eq!(
+                *right,
+                Expr::Number(2),
+            );
+        }
+
+        _ => panic!(
+            "expected binary expression",
+        ),
+    }
+}
+
+
+#[test]
+fn test_parse_select_group_by_having_sum() {
+
+    let sql = "
+        SELECT age, SUM(age)
+        FROM users
+        GROUP BY age
+        HAVING SUM(age) >= 100;
+    ";
+
+    let lexer = Lexer::new(sql);
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    let select = match statement {
+
+        Statement::Select(select) => select,
+
+        _ => panic!("expected SELECT"),
+    };
+
+    let having = select.having.unwrap();
+
+    match having {
+
+        Expr::Binary {
+
+            left,
+            op,
+            right,
+
+        } => {
+
+            assert_eq!(
+                op,
+                BinaryOperator::GreaterThanOrEqual,
+            );
+
+            match *left {
+
+                Expr::Aggregate {
+
+                    function,
+                    argument,
+
+                } => {
+
+                    assert_eq!(
+                        function,
+                        AggregateFunction::Sum,
+                    );
+
+                    assert_eq!(
+                        *argument,
+                        Expr::Identifier(
+                            "age".into(),
+                        ),
+                    );
+                }
+
+                _ => panic!(
+                    "expected aggregate",
+                ),
+            }
+
+            assert_eq!(
+                *right,
+                Expr::Number(100),
+            );
+        }
+
+        _ => panic!(
+            "expected binary",
+        ),
+    }
+}
+
+
+#[test]
+fn test_parse_select_group_by_having_avg() {
+
+    let sql = "
+        SELECT age, AVG(age)
+        FROM users
+        GROUP BY age
+        HAVING AVG(age) < 40;
+    ";
+
+    let lexer = Lexer::new(sql);
+
+    let mut parser = Parser::new(lexer);
+
+    let statement = parser.parse_statement();
+
+    let select = match statement {
+
+        Statement::Select(select) => select,
+
+        _ => panic!("expected SELECT"),
+    };
+
+    let having = select.having.unwrap();
+
+    match having {
+
+        Expr::Binary {
+
+            left,
+            op,
+            right,
+
+        } => {
+
+            assert_eq!(
+                op,
+                BinaryOperator::LessThan,
+            );
+
+            match *left {
+
+                Expr::Aggregate {
+
+                    function,
+                    argument,
+
+                } => {
+
+                    assert_eq!(
+                        function,
+                        AggregateFunction::Avg,
+                    );
+
+                    assert_eq!(
+                        *argument,
+                        Expr::Identifier(
+                            "age".into(),
+                        ),
+                    );
+                }
+
+                _ => panic!(
+                    "expected aggregate",
+                ),
+            }
+
+            assert_eq!(
+                *right,
+                Expr::Number(40),
+            );
+        }
+
+        _ => panic!(
+            "expected binary",
+        ),
     }
 }

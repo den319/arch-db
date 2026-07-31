@@ -388,7 +388,7 @@ fn test_get_missing_key_returns_tombstone() {
     let mut engine = make_engine();
 
     match engine.get("missing") {
-        Some(Value::Tombstone) => {}
+        None => {}
         _ => panic!("expected tombstone"),
     }
 }
